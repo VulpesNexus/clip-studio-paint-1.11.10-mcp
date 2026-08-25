@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "profile_id": "csp-5.1.2-zh-CN-dpi120-v1",
+  "csp_executable": "%USERPROFILE%\\Applications\\CLIP STUDIO 1.5\\CLIP STUDIO PAINT\\CLIPStudioPaint.exe",
+  "expected_company_contains": "CELSYS",
+  "allowed_file_versions": ["5.1.2.0"],
+  "allowed_sha256": ["A74C276B3D745E76791C4D81E60E56FA0F8D49ECA7661DCD1FD0DDE4030E8F30"],
+  "expected_dpi": 120,
+  "expected_locale": "zh-CN",
+  "strict_profile_for_input": true,
+  "shortcut_profile_files": [
+    {
+      "path": "%APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\default.khc",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "path": "%APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\DefaultToolModifyKey.tomd",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "quiet_period_ms": 2000,
+  "quiet_wait_timeout_ms": 8000,
+  "capture_ttl_seconds": 30,
+  "confirmation_ttl_seconds": 45,
+  "max_capture_width": 1600,
+  "max_text_chars": 4096,
+  "max_macro_steps": 12,
+  "max_drag_seconds": 5.0,
+  "path_roots": [
+    {
+      "id": "input",
+      "path": "%USERPROFILE%\\Documents\\CSP-MCP-Assets\\Input",
+      "read": true,
+      "write": false
+    },
+    {
+      "id": "working",
+      "path": "%USERPROFILE%\\Documents\\CSP-MCP-Assets\\Working",
+      "read": true,
+      "write": true
+    },
+    {
+      "id": "exports",
+      "path": "%USERPROFILE%\\Documents\\CSP-MCP-Assets\\Exports",
+      "read": true,
+      "write": true
+    }
+  ],
+  "input_extensions": [
+    ".clip", ".lip", ".cmc", ".psd", ".psb", ".png", ".jpg", ".jpeg",
+    ".webp", ".tif", ".tiff", ".bmp", ".tga", ".svg"
+  ],
+  "output_extensions": [
+    ".clip", ".psd", ".psb", ".png", ".jpg", ".jpeg", ".webp", ".tif",
+    ".tiff", ".bmp", ".tga"
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "profile_id": "csp-5.1.2-zh-CN-dpi120-v1",
+  "commands": [
+    {
+      "id": "ui.cancel",
+      "title": "取消当前操作",
+      "description": "发送 Escape，关闭菜单或取消当前未提交操作。",
+      "category": "ui",
+      "effect": "ui",
+      "risk": "low",
+      "keys": ["ESCAPE"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "document.new_dialog",
+      "title": "打开新建文档对话框",
+      "description": "使用 CSP 默认 Ctrl+N；只打开对话框，不自动确认。",
+      "category": "document",
+      "effect": "ui",
+      "risk": "low",
+      "keys": ["CTRL", "N"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "document.open_dialog",
+      "title": "打开文件对话框",
+      "description": "使用 CSP 默认 Ctrl+O；优先使用 csp_open_document 打开白名单文件。",
+      "category": "document",
+      "effect": "ui",
+      "risk": "low",
+      "keys": ["CTRL", "O"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "edit.undo",
+      "title": "撤销",
+      "description": "使用 CSP 默认 Ctrl+Z。",
+      "category": "edit",
+      "effect": "document",
+      "risk": "modify",
+      "keys": ["CTRL", "Z"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "edit.redo",
+      "title": "重做",
+      "description": "使用 CSP 默认 Ctrl+Y。",
+      "category": "edit",
+      "effect": "document",
+      "risk": "modify",
+      "keys": ["CTRL", "Y"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "selection.all",
+      "title": "全选",
+      "description": "使用 CSP 默认 Ctrl+A。",
+      "category": "selection",
+      "effect": "document",
+      "risk": "modify",
+      "keys": ["CTRL", "A"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "selection.deselect",
+      "title": "取消选择",
+      "description": "使用 CSP 默认 Ctrl+D。",
+      "category": "selection",
+      "effect": "document",
+      "risk": "modify",
+      "keys": ["CTRL", "D"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "document.save_as_dialog",
+      "title": "打开另存为对话框",
+      "description": "使用 Ctrl+Shift+S；不会自动写入或确认路径。",
+      "category": "document",
+      "effect": "ui",
+      "risk": "low",
+      "keys": ["CTRL", "SHIFT", "S"],
+      "requires_confirmation": false,
+      "enabled": true
+    },
+    {
+      "id": "document.close",
+      "title": "关闭当前文档",
+      "description": "使用 Ctrl+W；可能触发未保存提示，必须先调用 csp_preflight。",
+      "category": "document",
+      "effect": "document",
+      "risk": "destructive",
+      "keys": ["CTRL", "W"],
+      "requires_confirmation": true,
+      "enabled": true
+    }
+  ]
+}
