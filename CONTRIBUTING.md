@@ -40,7 +40,7 @@ run CSP-dependent smoke or interactive acceptance tests.
 
 ## Change requirements
 
-- Preserve fail-closed executable signature, version, hash, locale, DPI,
+- Preserve fail-closed executable signature, version, hash, optional locale pin, DPI,
   shortcut-profile, capture, window-identity, and input-time checks.
 - Never weaken the preflight/token boundary merely to simplify host approval.
 - Do not add arbitrary shell, process, registry, shortcut, or filesystem tools.

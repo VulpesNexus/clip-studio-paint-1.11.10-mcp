@@ -6,7 +6,11 @@ param(
 
     [string[]]$ShortcutProfileFiles,
 
-    [string]$AssetsRoot
+    [string]$AssetsRoot,
+
+    # '*' allows any Windows culture. Dialog language is checked separately.
+    [ValidateNotNullOrEmpty()]
+    [string]$ExpectedLocale = '*'
 )
 
 Set-StrictMode -Version Latest
@@ -15,7 +19,6 @@ $ErrorActionPreference = 'Stop'
 $ExpectedVersion = '5.1.2.0'
 $ExpectedPublisher = 'CELSYS'
 $ExpectedDpi = 120
-$ExpectedLocale = 'zh-CN'
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $ConfigDirectory = Join-Path $ProjectRoot 'config'
 $OutputPath = Join-Path $ConfigDirectory 'config.local.json'

@@ -13,7 +13,18 @@ from .controller import CspController
 from .errors import ToolEnvelope, ok_result
 
 
-INSTRUCTIONS = """仅控制经签名和哈希验证的 CLIP STUDIO PAINT 5.1.2。任何点击、拖动、滚动、文字、导航键、登记命令、Auto Action、命令序列或原生文件对话框操作，都必须先调用 csp_preflight，批准精确工具名和完整参数。普通界面输入在 preflight 返回并聚焦 CSP 后重新调用 csp_capture，再把新 captureId 与单次 confirmToken 交给原子工具；文件对话框令牌直接绑定 exact main/dialog HWND。标准 #32770 对话框出现时只使用 csp_native_file_dialog 或 csp_cancel。不要把截图变化称为图层级语义确认。发现用户键鼠输入、版本/DPI/语言变化或多窗口歧义时停止。路径参数型工具只在白名单素材目录读写；禁止解析或修改 .clip 二进制，禁止尝试私有 Companion 协议、DLL 注入、账号、商店、云同步和发布操作。"""
+INSTRUCTIONS = """Control only the signature- and hash-verified CLIP STUDIO PAINT 5.1.2.
+Before any atomic input, call csp_preflight with the exact tool name and full parameters.
+For ordinary input, capture again after preflight focuses CSP; use that fresh captureId
+and the single-use confirmToken. File-dialog tokens bind the exact main/dialog HWNDs.
+When a standard #32770 dialog appears, use only csp_native_file_dialog or csp_cancel.
+Screenshot changes do not establish layer semantics. Stop on user input, version/DPI
+mismatch, or ambiguous windows. Windows culture is unrestricted by default; explicit
+locale pins remain supported. Native file-dialog labels are verified independently
+in French, English, or Simplified Chinese; unknown dialogs are rejected.
+Path-taking tools operate only in allowlisted asset roots. Do not parse or modify
+.clip binaries, use private Companion protocols or DLL injection, or operate account,
+store, cloud-sync or publishing workflows."""
 
 mcp = FastMCP(
     name="csp-local-mcp",

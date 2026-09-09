@@ -8,6 +8,8 @@ import locale
 import math
 import mmap
 import os
+import re
+import unicodedata
 import struct
 import threading
 import time
@@ -1570,6 +1572,42 @@ def list_process_dialogs(
     ]
 
 
+# Exact labels after removing Windows accelerator/ellipsis decoration. Do not
+# use substring matches: "Do not save" must never authorize an output dialog.
+_FILE_DIALOG_LABELS = {
+    "input": {
+        "titles": {"open", "ouvrir", "打开"},
+        "buttons": {"open", "ouvrir", "打开"},
+    },
+    "output": {
+        "titles": {"save", "save as", "export", "enregistrer", "enregistrer sous",
+                   "exporter", "另存为", "保存", "导出"},
+        "buttons": {"save", "export", "enregistrer", "exporter", "保存", "导出"},
+    },
+}
+
+
+def _dialog_label(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value).casefold().strip()
+    value = re.sub(r"\(&[a-z]\)", "", value)
+    value = value.replace("&", "").strip().rstrip(".").strip()
+    return " ".join(value.split())
+
+
+def _file_dialog_mode(title: str, button: str) -> str:
+    title, button = _dialog_label(title), _dialog_label(button)
+    matches = [mode for mode, labels in _FILE_DIALOG_LABELS.items()
+               if title in labels["titles"] and button in labels["buttons"]]
+    if len(matches) != 1:
+        raise BridgeError(
+            "E_CAPABILITY_UNAVAILABLE",
+            "File dialog title and IDOK label must agree on Open or Save/Export "
+            "in a supported language (French, English, Simplified Chinese)",
+            retryable=True,
+        )
+    return matches[0]
+
+
 def _native_file_dialog_controls(dialog_hwnd: int) -> tuple[int, int, str]:
     if not win32gui.IsWindow(dialog_hwnd):
         raise BridgeError("E_WINDOW_NOT_FOUND", "Native file dialog no longer exists", retryable=True)
@@ -1605,20 +1643,7 @@ def _native_file_dialog_controls(dialog_hwnd: int) -> tuple[int, int, str]:
                 "okButtonCount": len(ok_buttons),
             },
         )
-    title = win32gui.GetWindowText(dialog_hwnd).strip()
-    button_text = str(ok_buttons[0]["text"]).strip()
-    if "打开" in title and "打开" in button_text:
-        mode = "input"
-    elif any(token in title for token in ("另存为", "保存", "导出")) and any(
-        token in button_text for token in ("保存", "导出")
-    ):
-        mode = "output"
-    else:
-        raise BridgeError(
-            "E_CAPABILITY_UNAVAILABLE",
-            "File dialog title and IDOK label do not match the pinned zh-CN open/save profile",
-            retryable=True,
-        )
+    mode = _file_dialog_mode(win32gui.GetWindowText(dialog_hwnd), str(ok_buttons[0]["text"]))
     return int(edits[0]["hwnd"]), int(ok_buttons[0]["hwnd"]), mode
 
 

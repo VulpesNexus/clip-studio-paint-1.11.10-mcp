@@ -6,7 +6,7 @@
   "allowed_file_versions": ["5.1.2.0"],
   "allowed_sha256": ["A74C276B3D745E76791C4D81E60E56FA0F8D49ECA7661DCD1FD0DDE4030E8F30"],
   "expected_dpi": 120,
-  "expected_locale": "zh-CN",
+  "expected_locale": "*",
   "strict_profile_for_input": true,
   "shortcut_profile_files": [
     {

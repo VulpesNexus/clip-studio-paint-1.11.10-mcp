@@ -1,15 +1,15 @@
 # CLIP STUDIO PAINT 5.1.2 Production MCP
 
 > [!IMPORTANT]
-> **Unofficial community project.** This repository is not affiliated with, endorsed by, or supported by CELSYS. It is a local stdio MCP bridge for **Windows + CLIP STUDIO PAINT 5.1.2.0 production + `zh-CN` + DPI 120**. Other CSP versions, preview/Early Access builds, locales, DPI values, and operating systems are not supported by the bundled strict profile.
+> **Unofficial community project.** This repository is not affiliated with, endorsed by, or supported by CELSYS. It is a local stdio MCP bridge for **Windows + CLIP STUDIO PAINT 5.1.2.0 production + DPI 120**. Other CSP versions, preview/Early Access builds, DPI values, and operating systems are not supported by the bundled strict profile.
 
-As of 2026-08-25, the CELSYS public documentation reviewed for this project does not document a general-purpose CSP document/layer API, scripting runtime, MCP, or supported headless CLI; its published SDK is scoped to EX filter plug-ins. In the validated 5.1.2 `zh-CN` profile, CSP's custom-drawn areas also do not expose meaningful layer, brush, or menu objects through Windows UI Automation. This project therefore offers 33 deliberately constrained capabilities built from visible-window inspection, screenshots, allowlisted input, registered shortcuts/Auto Actions, and file exchange. It is **not** a native layer-object API and cannot honestly expose every internal CSP function.
+As of 2026-08-25, the CELSYS public documentation reviewed for this project does not document a general-purpose CSP document/layer API, scripting runtime, MCP, or supported headless CLI; its published SDK is scoped to EX filter plug-ins. CSP's custom-drawn areas do not expose meaningful layer, brush, or menu objects through Windows UI Automation. This project therefore offers 33 deliberately constrained capabilities built from visible-window inspection, screenshots, allowlisted input, registered shortcuts/Auto Actions, and file exchange. It is **not** a native layer-object API and cannot honestly expose every internal CSP function.
 
 ## What is included
 
 - 33 MCP tools; see the complete [tool catalog](docs/TOOL_CATALOG.md).
 - CSP executable attestation: fixed path, Authenticode signature, CELSYS company field, exact file version, and SHA-256.
-- Per-Monitor DPI Awareness V2 with a strict `zh-CN` / DPI 120 production profile.
+- Per-Monitor DPI Awareness V2 with a DPI 120 production profile and locale-independent ordinary controls.
 - Process, main-window, foreground-window, dialog, display, user-activity, screenshot, pixel sampling, and screenshot-difference inspection.
 - Screenshot-bound pointer movement, clicks, double-clicks, drags, scrolling, navigation keys, and Unicode text input.
 - Versioned shortcut commands, constrained command sequences, and user-registered Auto Actions.
@@ -34,12 +34,31 @@ agent.
 |---|---|
 | Operating system | Windows only |
 | CLIP STUDIO PAINT | `5.1.2.0` production executable pinned by SHA-256 |
-| UI profile | `zh-CN`, effective CSP window DPI `120` |
+| UI profile | Any Windows culture; French, English, and Simplified Chinese native file dialogs; effective CSP window DPI `120` |
 | Python | CPython `3.13.x` |
 | MCP host | Codex registration script included; other stdio hosts require equivalent approval policy |
 | CSP edition | Core visible-window tools are profile-bound; Auto Actions require PRO or EX and `.cmc` is EX-only |
 
-The strict profile fails closed when the executable, shortcut files, locale, DPI, or window identity does not match. Do not remove those checks to make a different machine “work”; create and validate a new profile instead.
+The profile fails closed when the executable, shortcut files, an optional locale pin, DPI, or window identity does not match. Create and validate a separate profile for a different CSP build or DPI.
+
+## Local locale support
+
+New configurations use `expected_locale: "*"`, which accepts any Windows culture.
+Existing configurations may use that value or an explicit pin such as `fr-FR`.
+`configure.ps1 -ExpectedLocale fr-FR` writes that pin. The historical profile ID
+remains for registry compatibility; its `zh-CN` substring no longer sets policy.
+
+Native file dialogs still require their existing control structure and matching
+Open or Save/Export labels. French, English, and Simplified Chinese labels are
+supported, including accelerator markers and ellipses. Unknown labels, conflicting
+modes, and ambiguous controls are rejected. Add fixtures and native acceptance
+coverage before enabling another dialog language.
+
+Executable, DPI, shortcut, path, and confirmation checks remain in place. The
+unit suite passed on Python 3.14.6 on 2026-09-09, including the French and English
+dialog fixtures and the DPI and explicit-locale checks. This does not validate the
+locked Python 3.13 deployment. Native CSP acceptance on this workstation remains
+pending.
 
 ## Quick start: configure → install → test → register
 

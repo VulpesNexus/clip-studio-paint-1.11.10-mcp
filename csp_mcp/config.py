@@ -153,6 +153,14 @@ class Settings:
     input_extensions: frozenset[str]
     output_extensions: frozenset[str]
 
+    def locale_matches(self, actual: str) -> bool:
+        """Windows culture does not determine CSP UI language or shortcut bindings.
+
+        '*' permits any culture; explicit legacy pins remain supported.
+        Native file dialogs validate their own labels independently.
+        """
+        return self.expected_locale == "*" or actual.casefold() == self.expected_locale.casefold()
+
     def root(self, root_id: str) -> PathRoot:
         for entry in self.path_roots:
             if entry.id == root_id:

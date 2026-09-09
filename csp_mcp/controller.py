@@ -298,7 +298,7 @@ class CspController:
                     details={"expected": self.settings.expected_dpi, "actual": record.dpi},
                 )
             actual_locale = win.current_locale_name()
-            if actual_locale.casefold() != self.settings.expected_locale.casefold():
+            if not self.settings.locale_matches(actual_locale):
                 raise BridgeError(
                     "E_LOCALE_UNSUPPORTED",
                     "Windows locale differs from the validated profile",
@@ -866,7 +866,7 @@ class CspController:
         profile_matches = bool(
             record
             and record.dpi == self.settings.expected_dpi
-            and win.current_locale_name().casefold() == self.settings.expected_locale.casefold()
+            and self.settings.locale_matches(win.current_locale_name())
             and identity.get("supported")
         )
         enabled_actions = [item for item in self.auto_actions.values() if item.get("enabled", False)]
