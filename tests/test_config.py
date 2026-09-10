@@ -137,6 +137,36 @@ class ConfigurationTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         load_settings()
 
+    def test_capture_overlay_allowlist_is_optional_exact_and_fail_closed(self) -> None:
+        baseline = config_module._read_json(config_module.CONFIG_DIR / "config.json")
+        self.assertNotIn("capture_ignored_overlays", baseline)
+        with patch("csp_mcp.config._read_json", return_value=copy.deepcopy(baseline)):
+            self.assertEqual(load_settings().capture_ignored_overlays, ())
+        entry = {"process": "Discord.exe", "class_name": "Chrome_WidgetWin_1", "title": "Discord Overlay"}
+        candidate = copy.deepcopy(baseline)
+        candidate["capture_ignored_overlays"] = [entry]
+        with patch("csp_mcp.config._read_json", return_value=candidate):
+            (overlay,) = load_settings().capture_ignored_overlays
+        self.assertEqual(
+            (overlay.process, overlay.class_name, overlay.title),
+            ("Discord.exe", "Chrome_WidgetWin_1", "Discord Overlay"),
+        )
+        malformed = (
+            {},
+            ["Discord.exe"],
+            [{"process": "Discord.exe"}],
+            [dict(entry, title="  ")],
+            [dict(entry, extra=True)],
+            [entry, dict(entry)],
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                candidate = copy.deepcopy(baseline)
+                candidate["capture_ignored_overlays"] = value
+                with patch("csp_mcp.config._read_json", return_value=candidate):
+                    with self.assertRaises(RuntimeError):
+                        load_settings()
+
     def test_path_roots_reject_overlap(self) -> None:
         candidate = copy.deepcopy(config_module._read_json(config_module.CONFIG_DIR / "config.json"))
         candidate["path_roots"][1]["path"] = candidate["path_roots"][0]["path"] + r"\nested"

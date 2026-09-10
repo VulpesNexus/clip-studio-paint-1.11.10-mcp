@@ -352,7 +352,12 @@ class CspController:
         input_tick_before = win.get_last_input()[0] if authorizable and region is None else 0
         captured_foreground = win.foreground_window()
         capture_target = replace(record, required_foreground_hwnd=captured_foreground)
-        data = win.capture_window(capture_target, region=region, max_width=width)
+        data = win.capture_window(
+            capture_target,
+            region=region,
+            max_width=width,
+            ignored_overlays=self.settings.capture_ignored_overlays,
+        )
         input_tick_after = win.get_last_input()[0] if authorizable and region is None else 0
         standard_dialogs = self._visible_standard_dialogs(record)
         # A clipped full-window capture has a different origin from
@@ -416,6 +421,7 @@ class CspController:
             "controlGeneration": entry.control_generation,
             "windowFingerprint": entry.window_fingerprint,
             "region": list(entry.region) if entry.region else None,
+            "ignoredOverlayWindowIds": list(entry.data.ignored_overlays),
             "captureMaxWidth": entry.capture_max_width,
             "authorizableForInput": entry.authorizable,
             "inputAuthorizationBlockedBy": entry.authorization_denial_reason,
@@ -497,7 +503,11 @@ class CspController:
                 retryable=True,
                 recovery=["Call csp_capture again"],
             )
-        current = win.capture_window(record, max_width=entry.capture_max_width)
+        current = win.capture_window(
+            record,
+            max_width=entry.capture_max_width,
+            ignored_overlays=self.settings.capture_ignored_overlays,
+        )
         if win.get_last_input()[0] != current_input_tick:
             entry.authorizable = False
             raise BridgeError(
@@ -857,7 +867,7 @@ class CspController:
         capture_ready = False
         capture_reason = reason
         if record is not None:
-            capture_ready, capture_reason = win.capture_readiness(record)
+            capture_ready, capture_reason = win.capture_readiness(record, self.settings.capture_ignored_overlays)
         input_capture_ready = bool(
             capture_ready
             and record

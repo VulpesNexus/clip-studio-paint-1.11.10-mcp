@@ -67,6 +67,26 @@ profile. The stdio smoke test passed every functional check, but on a heavily lo
 machine it missed its 0.75-second concurrent-read budget (0.96 seconds). Native
 acceptance and capture coverage on 1.11.10 are still pending.
 
+### Click-through overlays
+
+Capture refuses whenever a window from another process overlaps CSP, because a screen
+capture would include anything that window paints. Some overlays cover the whole desktop
+permanently yet usually paint nothing; Discord's in-game overlay is one. A local
+configuration may list such overlays in `capture_ignored_overlays`, each identified by its
+exact process image name, window class, and title:
+
+```json
+"capture_ignored_overlays": [
+  {"process": "Discord.exe", "class_name": "Chrome_WidgetWin_1", "title": "Discord Overlay"}
+]
+```
+
+An entry matches only a layered, mouse-transparent window, so an ordinary window with the
+same identity still blocks capture. Listing an overlay attests that it is not painting over
+CSP while you capture. Every capture that skipped one reports the window ID in
+`ignoredOverlayWindowIds`. Input authorization is unchanged, because Windows hit-testing
+already passes through such windows. The tracked template lists none.
+
 ## Local locale support
 
 New configurations use `expected_locale: "*"`, which accepts any Windows culture.

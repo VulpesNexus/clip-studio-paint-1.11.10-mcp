@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from csp_mcp import win32_backend as backend
+from csp_mcp.config import OverlayIdentity
 from csp_mcp.errors import BridgeError
 from csp_mcp.win32_backend import (
     ControlGeneration,
@@ -170,6 +171,47 @@ class Win32BackendTests(unittest.TestCase):
             rect[0] = (100, 100, 102, 102)
             with self.assertRaises(BridgeError):
                 backend.assert_capture_target_visible(self.window, self.window.rect)
+
+    def test_capture_visibility_skips_only_an_allowlisted_click_through_overlay(self) -> None:
+        overlay = OverlayIdentity("Discord.exe", "Chrome_WidgetWin_1", "Discord Overlay")
+        style = [backend.WS_EX_LAYERED | backend.WS_EX_TRANSPARENT]
+        title = ["Discord Overlay"]
+
+        def previous_window(hwnd, _relation):
+            return 20 if hwnd == self.window.hwnd else 0
+
+        with (
+            patch("csp_mcp.win32_backend.assert_foreground_target"),
+            patch("csp_mcp.win32_backend.win32gui.GetWindow", side_effect=previous_window),
+            patch("csp_mcp.win32_backend.win32gui.IsWindowVisible", return_value=True),
+            patch("csp_mcp.win32_backend.win32gui.IsIconic", return_value=False),
+            patch("csp_mcp.win32_backend.visible_window_rect", return_value=(0, 0, 2000, 2000)),
+            patch("csp_mcp.win32_backend.window_at_point", return_value=self.window.hwnd),
+            patch(
+                "csp_mcp.win32_backend._pid_for_window",
+                side_effect=lambda hwnd: self.window.pid if hwnd == self.window.hwnd else 999,
+            ),
+            patch("csp_mcp.win32_backend.window_belongs_to_main", side_effect=lambda hwnd, main: hwnd == main),
+            patch("csp_mcp.win32_backend.win32gui.GetWindowLong", side_effect=lambda _hwnd, _index: style[0]),
+            patch("csp_mcp.win32_backend.win32gui.GetClassName", return_value="Chrome_WidgetWin_1"),
+            patch("csp_mcp.win32_backend.win32gui.GetWindowText", side_effect=lambda _hwnd: title[0]),
+            patch("csp_mcp.win32_backend.process_path", return_value=Path(r"C:\Discord\Discord.exe")),
+        ):
+            # Not configured: the overlay blocks capture as any foreign window does.
+            with self.assertRaises(BridgeError):
+                backend.assert_capture_target_visible(self.window, self.window.rect)
+            self.assertEqual(
+                backend.assert_capture_target_visible(self.window, self.window.rect, [overlay]),
+                (20,),
+            )
+            # Same identity, but a window that takes mouse input is not an overlay.
+            style[0] = backend.WS_EX_LAYERED
+            with self.assertRaises(BridgeError):
+                backend.assert_capture_target_visible(self.window, self.window.rect, [overlay])
+            style[0] = backend.WS_EX_LAYERED | backend.WS_EX_TRANSPARENT
+            title[0] = "Discord"
+            with self.assertRaises(BridgeError):
+                backend.assert_capture_target_visible(self.window, self.window.rect, [overlay])
 
     def test_every_held_virtual_key_counts_as_human_activity(self) -> None:
         with patch(

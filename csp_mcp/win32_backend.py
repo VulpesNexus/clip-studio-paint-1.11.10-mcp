@@ -555,8 +555,43 @@ def assert_point_target(record: WindowRecord, x: int, y: int) -> None:
         )
 
 
-def assert_capture_target_visible(record: WindowRecord, rect: tuple[int, int, int, int]) -> None:
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_LAYERED = 0x00080000
+
+
+def _allowlisted_overlay(hwnd: int, ignored_overlays: Sequence[Any]) -> bool:
+    """Whether ``hwnd`` is a click-through overlay the configuration explicitly allows.
+
+    Only a layered, mouse-transparent window can match, and only on its exact process
+    image name, class, and title.  Such an overlay (Discord's covers the whole desktop)
+    paints nothing most of the time but can, so allowing one is the user's attestation,
+    and every capture that skipped one says so.
+    """
+    if not ignored_overlays:
+        return False
+    required = WS_EX_LAYERED | WS_EX_TRANSPARENT
+    if win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & required != required:
+        return False
+    executable = process_path(_pid_for_window(hwnd))
+    if executable is None:
+        return False
+    process = executable.name.casefold()
+    class_name = win32gui.GetClassName(hwnd)
+    title = win32gui.GetWindowText(hwnd)
+    return any(
+        overlay.process.casefold() == process and overlay.class_name == class_name and overlay.title == title
+        for overlay in ignored_overlays
+    )
+
+
+def assert_capture_target_visible(
+    record: WindowRecord,
+    rect: tuple[int, int, int, int],
+    ignored_overlays: Sequence[Any] = (),
+) -> tuple[int, ...]:
+    """Refuse a capture anything else could paint into; return allowlisted overlays skipped."""
     assert_foreground_target(record)
+    skipped: list[int] = []
     left, top, right, bottom = rect
     width = right - left
     height = bottom - top
@@ -587,6 +622,10 @@ def assert_capture_target_visible(record: WindowRecord, rect: tuple[int, int, in
                     _pid_for_window(above) != record.pid
                     or not window_belongs_to_main(above, record.hwnd)
                 ):
+                    if _allowlisted_overlay(above, ignored_overlays):
+                        skipped.append(above)
+                        above = int(win32gui.GetWindow(above, win32con.GW_HWNDPREV) or 0)
+                        continue
                     raise BridgeError(
                         "E_CAPABILITY_UNAVAILABLE",
                         "A window outside the selected CSP main-window chain overlaps the capture rectangle",
@@ -619,13 +658,17 @@ def assert_capture_target_visible(record: WindowRecord, rect: tuple[int, int, in
                     retryable=True,
                     recovery=["Bring CSP fully to the front and retry"],
                 )
+    return tuple(skipped)
 
 
-def capture_readiness(record: WindowRecord) -> tuple[bool, str | None]:
+def capture_readiness(
+    record: WindowRecord,
+    ignored_overlays: Sequence[Any] = (),
+) -> tuple[bool, str | None]:
     if record.minimized:
         return False, "E_CAPABILITY_UNAVAILABLE:minimized"
     try:
-        assert_capture_target_visible(record, _clip_to_virtual_screen(record.rect))
+        assert_capture_target_visible(record, _clip_to_virtual_screen(record.rect), ignored_overlays)
         return True, None
     except BridgeError as exc:
         return False, exc.code
@@ -937,6 +980,7 @@ class CaptureData:
     rect: tuple[int, int, int, int]
     sha256: str
     luminance_stddev: float
+    ignored_overlays: tuple[str, ...] = ()
 
 
 def capture_window(
@@ -944,6 +988,7 @@ def capture_window(
     *,
     region: Sequence[float] | None = None,
     max_width: int = 1600,
+    ignored_overlays: Sequence[Any] = (),
 ) -> CaptureData:
     if record.minimized:
         raise BridgeError(
@@ -952,12 +997,12 @@ def capture_window(
             retryable=True,
         )
     rect = _clip_to_virtual_screen(record.rect)
-    assert_capture_target_visible(record, rect)
+    assert_capture_target_visible(record, rect, ignored_overlays)
     try:
         image = ImageGrab.grab(bbox=rect, all_screens=True)
     except Exception as exc:
         raise BridgeError("E_CAPABILITY_UNAVAILABLE", f"Window capture failed: {exc}", retryable=True) from exc
-    assert_capture_target_visible(record, rect)
+    skipped = assert_capture_target_visible(record, rect, ignored_overlays)
     source_width, source_height = image.size
     if region is not None:
         if len(region) != 4:
@@ -987,6 +1032,7 @@ def capture_window(
         rect=rect,
         sha256=hashlib.sha256(png).hexdigest(),
         luminance_stddev=round(stddev, 3),
+        ignored_overlays=tuple(str(hwnd) for hwnd in skipped),
     )
 
 

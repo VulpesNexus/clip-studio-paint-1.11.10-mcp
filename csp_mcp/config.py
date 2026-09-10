@@ -156,6 +156,15 @@ class PinnedFile:
 
 
 @dataclass(frozen=True)
+class OverlayIdentity:
+    """A click-through overlay the local user allows above CSP during screen capture."""
+
+    process: str
+    class_name: str
+    title: str
+
+
+@dataclass(frozen=True)
 class Settings:
     schema_version: int
     profile_id: str
@@ -178,6 +187,7 @@ class Settings:
     path_roots: tuple[PathRoot, ...]
     input_extensions: frozenset[str]
     output_extensions: frozenset[str]
+    capture_ignored_overlays: tuple[OverlayIdentity, ...] = ()
 
     def locale_matches(self, actual: str) -> bool:
         """Windows culture does not determine CSP UI language or shortcut bindings.
@@ -311,6 +321,24 @@ def load_settings() -> Settings:
         ):
             raise RuntimeError(f"{label}_extensions must be a non-empty unique extension list")
 
+    # Optional and local: an exact identity for each click-through overlay the user
+    # attests does not paint over CSP.  Anything malformed fails closed.
+    overlays_raw = raw.get("capture_ignored_overlays", [])
+    if not isinstance(overlays_raw, list) or any(not isinstance(item, dict) for item in overlays_raw):
+        raise RuntimeError("capture_ignored_overlays must be a JSON array of objects")
+    overlays: list[OverlayIdentity] = []
+    for item in overlays_raw:
+        values = [item.get(key) for key in ("process", "class_name", "title")]
+        if set(item) != {"process", "class_name", "title"} or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise RuntimeError(
+                "Every capture_ignored_overlays entry needs exactly a non-empty process, class_name, and title"
+            )
+        overlays.append(OverlayIdentity(*(value.strip() for value in values)))
+    if len(set(overlays)) != len(overlays):
+        raise RuntimeError("capture_ignored_overlays entries must be unique")
+
     return Settings(
         schema_version=raw["schema_version"],
         profile_id=profile_id,
@@ -333,6 +361,7 @@ def load_settings() -> Settings:
         path_roots=roots,
         input_extensions=frozenset(input_extensions),
         output_extensions=frozenset(output_extensions),
+        capture_ignored_overlays=tuple(overlays),
     )
 
 
