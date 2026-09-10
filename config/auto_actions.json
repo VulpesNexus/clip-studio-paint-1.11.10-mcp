@@ -1,5 +1,5 @@
 {
   "schema_version": 1,
-  "profile_id": "csp-5.1.2-zh-CN-dpi120-v1",
+  "profile_ids": ["csp-5.1.2-zh-CN-dpi120-v1", "csp-1.11.10-dpi96-v1"],
   "actions": []
 }

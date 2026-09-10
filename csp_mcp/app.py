@@ -13,7 +13,7 @@ from .controller import CspController
 from .errors import ToolEnvelope, ok_result
 
 
-INSTRUCTIONS = """Control only the signature- and hash-verified CLIP STUDIO PAINT 5.1.2.
+INSTRUCTIONS = """Control only the signature- and hash-verified CLIP STUDIO PAINT build of the active profile.
 Before any atomic input, call csp_preflight with the exact tool name and full parameters.
 For ordinary input, capture again after preflight focuses CSP; use that fresh captureId
 and the single-use confirmToken. File-dialog tokens bind the exact main/dialog HWNDs.

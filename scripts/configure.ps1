@@ -10,15 +10,28 @@ param(
 
     # '*' allows any Windows culture. Dialog language is checked separately.
     [ValidateNotNullOrEmpty()]
-    [string]$ExpectedLocale = '*'
+    [string]$ExpectedLocale = '*',
+
+    # Selects one of the validated profiles below; any other build is rejected.
+    [ValidateSet('5.1.2.0', '1.11.10.0')]
+    [string]$ExpectedVersion = '5.1.2.0'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ExpectedVersion = '5.1.2.0'
+# One entry per validated CSP build.  commands.json and auto_actions.json declare
+# the profile ids they are valid for, and Dpi is the effective CSP window DPI the
+# profile was validated at.  CSP 1.x keeps user settings under Documents\CELSYS;
+# later builds keep them under %APPDATA%\CELSYSUserData.
+$KnownProfiles = @{
+    '5.1.2.0' = @{ ProfileId = 'csp-5.1.2-zh-CN-dpi120-v1'; Dpi = 120; SettingsRoot = 'AppData' }
+    '1.11.10.0' = @{ ProfileId = 'csp-1.11.10-dpi96-v1'; Dpi = 96; SettingsRoot = 'Documents' }
+}
+# Not $Profile: PowerShell variables are case-insensitive and $PROFILE is automatic.
+$SelectedProfile = $KnownProfiles[$ExpectedVersion]
 $ExpectedPublisher = 'CELSYS'
-$ExpectedDpi = 120
+$ExpectedDpi = $SelectedProfile.Dpi
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $ConfigDirectory = Join-Path $ProjectRoot 'config'
 $OutputPath = Join-Path $ConfigDirectory 'config.local.json'
@@ -124,10 +137,18 @@ function Test-PathNestedOrEqual {
 
 try {
     if (-not $PSBoundParameters.ContainsKey('ShortcutProfileFiles')) {
-        if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
-            throw 'APPDATA is unavailable; pass -ShortcutProfileFiles explicitly.'
+        if ($SelectedProfile.SettingsRoot -eq 'Documents') {
+            $SettingsDocuments = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments)
+            if ([string]::IsNullOrWhiteSpace($SettingsDocuments)) {
+                throw 'The Documents folder is unavailable; pass -ShortcutProfileFiles explicitly.'
+            }
+            $ShortcutDirectory = Join-Path $SettingsDocuments 'CELSYS\CLIPStudioPaintVer1_5_0\Shortcut'
+        } else {
+            if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
+                throw 'APPDATA is unavailable; pass -ShortcutProfileFiles explicitly.'
+            }
+            $ShortcutDirectory = Join-Path $env:APPDATA 'CELSYSUserData\CELSYS\CLIPStudioPaintVer1_5_0\Shortcut'
         }
-        $ShortcutDirectory = Join-Path $env:APPDATA 'CELSYSUserData\CELSYS\CLIPStudioPaintVer1_5_0\Shortcut'
         $ShortcutProfileFiles = @(
             (Join-Path $ShortcutDirectory 'default.khc'),
             (Join-Path $ShortcutDirectory 'DefaultToolModifyKey.tomd')
@@ -228,7 +249,7 @@ try {
 
     $Configuration = [ordered]@{
         schema_version = 1
-        profile_id = 'csp-5.1.2-zh-CN-dpi120-v1'
+        profile_id = $SelectedProfile.ProfileId
         csp_executable = $ResolvedExecutable
         expected_company_contains = $ExpectedPublisher
         allowed_file_versions = @($ExpectedVersion)

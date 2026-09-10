@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +21,10 @@ class ConfigurationTests(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
 
     def test_profile_is_pinned_to_current_production_binary(self) -> None:
-        settings = load_settings()
+        # The tracked template, not whichever local profile this machine configured.
+        tracked = config_module.CONFIG_DIR / config_module.TRACKED_CONFIG_NAME
+        with patch.dict(os.environ, {config_module.CONFIG_ENV: str(tracked)}, clear=False):
+            settings = load_settings()
         self.assertEqual(settings.allowed_file_versions, ("5.1.2.0",))
         self.assertEqual(len(settings.allowed_sha256), 1)
         self.assertEqual(len(settings.allowed_sha256[0]), 64)
@@ -270,12 +274,64 @@ class ConfigurationTests(unittest.TestCase):
         def mismatched(path):
             data = original(path)
             if path.name == "commands.json":
+                data.pop("profile_ids", None)
                 data["profile_id"] = "wrong-profile"
             return data
 
         with patch("csp_mcp.config._read_json", side_effect=mismatched):
             with self.assertRaises(RuntimeError):
                 load_commands()
+
+    def test_registry_profile_lists_match_one_profile_and_fail_closed(self) -> None:
+        original = config_module._read_json
+        active = load_settings().profile_id
+
+        def with_commands(mutate):
+            def read(path):
+                data = original(path)
+                if path.name == "commands.json":
+                    data.pop("profile_id", None)
+                    data.pop("profile_ids", None)
+                    mutate(data)
+                return data
+            return read
+
+        def listed(data):
+            data["profile_ids"] = ["another-profile", active]
+
+        with patch("csp_mcp.config._read_json", side_effect=with_commands(listed)):
+            self.assertEqual(len(load_commands()), 9)
+
+        def both(data):
+            data["profile_id"] = active
+            data["profile_ids"] = [active]
+
+        def unlisted(data):
+            data["profile_ids"] = ["another-profile"]
+
+        def empty(data):
+            data["profile_ids"] = []
+
+        def duplicated(data):
+            data["profile_ids"] = [active, active]
+
+        def undeclared(data):
+            pass
+
+        for mutate in (both, unlisted, empty, duplicated, undeclared):
+            with self.subTest(case=mutate.__name__):
+                with patch("csp_mcp.config._read_json", side_effect=with_commands(mutate)):
+                    with self.assertRaises(RuntimeError):
+                        load_commands()
+
+    def test_tracked_registries_list_exactly_the_configurable_profiles(self) -> None:
+        script = (config_module.PROJECT_ROOT / "scripts" / "configure.ps1").read_text(encoding="utf-8")
+        configurable = set(re.findall(r"ProfileId = '([^']+)'", script))
+        self.assertEqual(configurable, {"csp-5.1.2-zh-CN-dpi120-v1", "csp-1.11.10-dpi96-v1"})
+        for name in ("commands.json", "auto_actions.json"):
+            with self.subTest(registry=name):
+                raw = config_module._read_json(config_module.CONFIG_DIR / name)
+                self.assertEqual(set(raw["profile_ids"]), configurable)
 
     def test_registry_rejects_string_booleans(self) -> None:
         with self.assertRaises(RuntimeError):

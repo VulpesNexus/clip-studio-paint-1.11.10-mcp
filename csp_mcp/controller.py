@@ -936,7 +936,7 @@ class CspController:
                 "invalidDialogCount": invalid_dialog_count,
             },
             "fileExchange": {"available": file_exchange_ready, "roots": root_status},
-            "uiaSemanticControls": {"available": False, "reason": "CSP 5.1.2 exposes only unnamed custom panes"},
+            "uiaSemanticControls": {"available": False, "reason": "CSP exposes only unnamed custom panes"},
             "layerObjectApi": {"available": False, "reason": "CELSYS provides no public general editor API"},
             "clipBinaryMutation": {"available": False, "reason": "Undocumented format; intentionally denied"},
             "syntheticPenPressure": {"available": False, "reason": "Mouse SendInput has no trusted pressure channel"},

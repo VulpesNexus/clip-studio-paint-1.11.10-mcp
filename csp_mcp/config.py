@@ -115,6 +115,32 @@ def _number_in_range(mapping: dict[str, Any], key: str, minimum: float, maximum:
     return float(value)
 
 
+def _registry_profile_ids(raw: dict[str, Any], name: str) -> frozenset[str]:
+    """The profiles a registry declares itself valid for.
+
+    A registry names one profile with ``profile_id`` or several with ``profile_ids``,
+    never both.  Registered keys are CSP default bindings, so one list can serve every
+    validated build whose defaults agree; an ambiguous or malformed declaration fails
+    closed instead of matching nothing silently.
+    """
+    single = raw.get("profile_id")
+    listed = raw.get("profile_ids")
+    if single is not None and listed is not None:
+        raise RuntimeError(f"{name} must declare profile_id or profile_ids, not both")
+    if listed is not None:
+        if (
+            not isinstance(listed, list)
+            or not listed
+            or any(not isinstance(item, str) or not item.strip() for item in listed)
+            or len({item.strip() for item in listed}) != len(listed)
+        ):
+            raise RuntimeError(f"{name} profile_ids must be a non-empty list of unique profile ids")
+        return frozenset(item.strip() for item in listed)
+    if not isinstance(single, str) or not single.strip():
+        raise RuntimeError(f"{name} must declare profile_id or profile_ids")
+    return frozenset({single.strip()})
+
+
 @dataclass(frozen=True)
 class PathRoot:
     id: str
@@ -315,7 +341,7 @@ def load_commands() -> dict[str, dict[str, Any]]:
     settings = load_settings()
     if int(raw.get("schema_version", -1)) != settings.schema_version:
         raise RuntimeError("commands.json schema_version does not match config.json")
-    if str(raw.get("profile_id", "")) != settings.profile_id:
+    if settings.profile_id not in _registry_profile_ids(raw, "commands.json"):
         raise RuntimeError("commands.json profile_id does not match the production profile")
     commands: dict[str, dict[str, Any]] = {}
     for item in raw.get("commands", []):
@@ -336,7 +362,7 @@ def load_auto_actions() -> dict[str, dict[str, Any]]:
     settings = load_settings()
     if int(raw.get("schema_version", -1)) != settings.schema_version:
         raise RuntimeError(f"{registry_path.name} schema_version does not match the active configuration")
-    if str(raw.get("profile_id", "")) != settings.profile_id:
+    if settings.profile_id not in _registry_profile_ids(raw, registry_path.name):
         raise RuntimeError(f"{registry_path.name} profile_id does not match the production profile")
     actions: dict[str, dict[str, Any]] = {}
     for item in raw.get("actions", []):

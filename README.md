@@ -1,7 +1,10 @@
 # CLIP STUDIO PAINT 5.1.2 Production MCP
 
 > [!IMPORTANT]
-> **Unofficial community project.** This repository is not affiliated with, endorsed by, or supported by CELSYS. It is a local stdio MCP bridge for **Windows + CLIP STUDIO PAINT 5.1.2.0 production + DPI 120**. Other CSP versions, preview/Early Access builds, DPI values, and operating systems are not supported by the bundled strict profile.
+> **Unofficial community project.** This repository is not affiliated with, endorsed by, or supported by CELSYS. It is a local stdio MCP bridge for **Windows + a pinned CLIP STUDIO PAINT build**. Two strict profiles are validated: **5.1.2.0 production at DPI 120** and **1.11.10.0 at DPI 96**. Other CSP versions, preview/Early Access builds, DPI values, and operating systems are not supported by the bundled strict profiles.
+
+> [!NOTE]
+> **Private fork.** This repository is a private fork of [A2pha/clip-studio-paint-5.1.2-production-mcp](https://github.com/A2pha/clip-studio-paint-5.1.2-production-mcp) (MIT License). It adds a validated CLIP STUDIO PAINT 1.11.10 profile alongside the upstream 5.1.2 profile; see [Validated profiles](#validated-profiles). GitHub does not allow a fork of a public repository to be private, so the upstream is tracked as the `upstream` Git remote instead of through GitHub's fork relationship.
 
 As of 2026-08-25, the CELSYS public documentation reviewed for this project does not document a general-purpose CSP document/layer API, scripting runtime, MCP, or supported headless CLI; its published SDK is scoped to EX filter plug-ins. CSP's custom-drawn areas do not expose meaningful layer, brush, or menu objects through Windows UI Automation. This project therefore offers 33 deliberately constrained capabilities built from visible-window inspection, screenshots, allowlisted input, registered shortcuts/Auto Actions, and file exchange. It is **not** a native layer-object API and cannot honestly expose every internal CSP function.
 
@@ -9,7 +12,7 @@ As of 2026-08-25, the CELSYS public documentation reviewed for this project does
 
 - 33 MCP tools; see the complete [tool catalog](docs/TOOL_CATALOG.md).
 - CSP executable attestation: fixed path, Authenticode signature, CELSYS company field, exact file version, and SHA-256.
-- Per-Monitor DPI Awareness V2 with a DPI 120 production profile and locale-independent ordinary controls.
+- Per-Monitor DPI Awareness V2 with a per-profile DPI pin (120 for 5.1.2, 96 for 1.11.10) and locale-independent ordinary controls.
 - Process, main-window, foreground-window, dialog, display, user-activity, screenshot, pixel sampling, and screenshot-difference inspection.
 - Screenshot-bound pointer movement, clicks, double-clicks, drags, scrolling, navigation keys, and Unicode text input.
 - Versioned shortcut commands, constrained command sequences, and user-registered Auto Actions.
@@ -33,13 +36,36 @@ agent.
 | Component | Supported target |
 |---|---|
 | Operating system | Windows only |
-| CLIP STUDIO PAINT | `5.1.2.0` production executable pinned by SHA-256 |
-| UI profile | Any Windows culture; French, English, and Simplified Chinese native file dialogs; effective CSP window DPI `120` |
+| CLIP STUDIO PAINT | `5.1.2.0` production or `1.11.10.0`, executable pinned by SHA-256 |
+| UI profile | Any Windows culture; French, English, and Simplified Chinese native file dialogs; effective CSP window DPI `120` (5.1.2) or `96` (1.11.10) |
 | Python | CPython `3.13.x` |
 | MCP host | Codex registration script included; other stdio hosts require equivalent approval policy |
 | CSP edition | Core visible-window tools are profile-bound; Auto Actions require PRO or EX and `.cmc` is EX-only |
 
 The profile fails closed when the executable, shortcut files, an optional locale pin, DPI, or window identity does not match. Create and validate a separate profile for a different CSP build or DPI.
+
+## Validated profiles
+
+| Profile ID | CSP file version | Window DPI | Shortcut settings folder |
+|---|---|---|---|
+| `csp-5.1.2-zh-CN-dpi120-v1` | `5.1.2.0` | 120 | `%APPDATA%\CELSYSUserData\CELSYS\CLIPStudioPaintVer1_5_0\Shortcut` |
+| `csp-1.11.10-dpi96-v1` | `1.11.10.0` | 96 | `Documents\CELSYS\CLIPStudioPaintVer1_5_0\Shortcut` |
+
+`configure.ps1 -ExpectedVersion` selects the profile and defaults to `5.1.2.0`; any other
+version is rejected. CSP 1.x keeps its user settings under Documents rather than
+`%APPDATA%\CELSYSUserData`, and the helper looks in the right place for each profile.
+`commands.json` and `auto_actions.json` list the profiles they are valid for in
+`profile_ids`. A registry that declares no matching profile, or declares both
+`profile_id` and `profile_ids`, fails closed.
+
+On 2026-09-10 the nine registered command bindings were checked against the 1.11.10
+shortcut database. `default.khc` is SQLite, and `shortcutmenu.modifier` uses the bits
+Alt=1, Shift=2, Ctrl=4. All nine bindings match. On Python 3.14.6 the 1.11.10 profile
+passed the unit suite. Against a running 1.11.10, `csp_health` reported the binary,
+signature, and shortcut pins as supported, and `csp_capabilities` reported a matching
+profile. The stdio smoke test passed every functional check, but on a heavily loaded
+machine it missed its 0.75-second concurrent-read budget (0.96 seconds). Native
+acceptance and capture coverage on 1.11.10 are still pending.
 
 ## Local locale support
 
@@ -62,7 +88,7 @@ pending.
 
 ## Quick start: configure → install → test → register
 
-Prerequisites: Git, CPython 3.13, Codex, and the exact supported CSP production build. Clone the repository to a trusted local directory:
+Prerequisites: Git, CPython 3.13, Codex, and a CSP build with a validated profile (see above). Clone the repository to a trusted local directory:
 
 ```powershell
 git clone https://github.com/A2pha/clip-studio-paint-5.1.2-production-mcp.git
@@ -74,19 +100,21 @@ Set-Location .\clip-studio-paint-5.1.2-production-mcp
 Run the configuration helper before installation. It creates a gitignored local configuration; machine-specific CSP, shortcut-profile, and asset-root paths must not be committed.
 
 ```powershell
-$CspExecutable = Read-Host 'Absolute path to CLIPStudioPaint.exe 5.1.2 production'
-& .\scripts\configure.ps1 -CspExecutable $CspExecutable
+$CspExecutable = Read-Host 'Absolute path to CLIPStudioPaint.exe (5.1.2.0 or 1.11.10.0)'
+& .\scripts\configure.ps1 -CspExecutable $CspExecutable                               # 5.1.2.0
+& .\scripts\configure.ps1 -CspExecutable $CspExecutable -ExpectedVersion '1.11.10.0'  # 1.11.10.0
 ```
 
 The configuration must identify:
 
-- the production `CLIPStudioPaint.exe`;
-- the expected CELSYS signature, `5.1.2.0` version, and executable SHA-256;
+- the `CLIPStudioPaint.exe` of a validated profile;
+- the expected CELSYS signature, that profile's file version, and the executable SHA-256;
 - the current user's CSP shortcut-setting files and their SHA-256 values;
 - three separate asset roots: read-only `Input`, read/write `Working`, and read/write `Exports`.
 
 Unless explicitly overridden, the helper discovers the supported shortcut files
-under the current user's `%APPDATA%` and creates the asset root as
+where the selected profile's CSP keeps them (`%APPDATA%` for 5.1.2, Documents for
+1.11.10) and creates the asset root as
 `CSP-MCP-Assets` under the current user's Documents folder. Use
 `-ShortcutProfileFiles` and `-AssetsRoot` when those locations differ.
 It also copies the repository's inert `mcp-dialog-smoke.svg` fixture into the

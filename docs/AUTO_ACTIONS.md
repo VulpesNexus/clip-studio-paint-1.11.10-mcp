@@ -13,7 +13,7 @@ CELSYS 官方说明 Auto Actions 适用于 PRO/EX，不支持 DEBUT；已跟踪�
 ```json
 {
   "schema_version": 1,
-  "profile_id": "csp-5.1.2-zh-CN-dpi120-v1",
+  "profile_ids": ["csp-5.1.2-zh-CN-dpi120-v1", "csp-1.11.10-dpi96-v1"],
   "actions": [
     {
       "id": "layer.merge_visible_copy",

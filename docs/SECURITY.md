@@ -4,8 +4,8 @@
 
 - stdio，本地进程；不监听 TCP 端口。
 - 仅固定路径 `CLIPStudioPaint.exe`。
-- 每次控制前验证 Authenticode、CELSYS 公司字段、5.1.2.0 文件版本和当前 SHA-256。
-- 严格 profile：默认接受任意 Windows 区域设置（`expected_locale: "*"`），也可固定指定区域设置；CSP 窗口 DPI 为 120。
+- 每次控制前验证 Authenticode、CELSYS 公司字段、当前 profile 固定的文件版本（5.1.2.0 或 1.11.10.0）和当前 SHA-256。
+- 严格 profile：默认接受任意 Windows 区域设置（`expected_locale: "*"`），也可固定指定区域设置；CSP 窗口 DPI 必须与 profile 一致（5.1.2 为 120，1.11.10 为 96）。
 - 鼠标坐标是 CSP 窗口或客户区的 `0..1` 归一化值，并绑定 30 秒内截图。
 - 屏幕截图前枚举 CSP 之上的全部顶层窗口；任何外部窗口与截图矩形相交都会拒绝，另保留 7×7 点校验作为二次检查。
 - 接受路径参数的文件工具仅限本机配置定义的 `Input`、`Working` 和 `Exports` 三个独立根；通用自绘界面输入不具备路径语义证明。公开仓库不提供任何用户机器路径作为默认值。
