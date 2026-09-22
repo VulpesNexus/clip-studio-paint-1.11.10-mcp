@@ -1,62 +1,66 @@
-# 工具目录
+# Tool catalog
 
-当前版本公开 33 个 CSP 专用工具。
+The server exposes 33 tools, all scoped to Clip Studio Paint.
 
-## 只读检查
+## Read-only inspection
 
-| 工具 | 功能 |
+| Tool | What it does |
 |---|---|
-| `csp_health` | 服务、签名、版本、哈希、进程、窗口、显示器与活动状态 |
-| `csp_capabilities` | 当前 profile 每项能力的 available/reason/backend |
-| `csp_get_activity` | 真人输入、静默时间、按下键与锁 |
-| `csp_list_windows` | CSP 主窗口、物理坐标、DPI、窗口指纹 |
-| `csp_get_state` | 前台、窗口、对话框、临时 revision |
-| `csp_capture` | CSP 窗口/区域 MCP 图片与 captureId |
-| `csp_compare_captures` | 两个截图的像素变化比例 |
-| `csp_sample_pixel` | 截图归一化坐标 RGBA |
-| `csp_inspect_ui` | Win32 子窗口与原生对话框 |
-| `csp_list_commands` | 已登记命令目录 |
-| `csp_list_auto_actions` | 已登记 Auto Actions |
+| `csp_health` | Service, signature, version, hash, process, window, display, and activity status |
+| `csp_capabilities` | For each capability of the active profile: available, reason, and backend |
+| `csp_get_activity` | Human input, idle time, pressed keys, and the control lock |
+| `csp_list_windows` | CSP main windows, physical coordinates, DPI, and window fingerprints |
+| `csp_get_state` | Foreground, windows, dialogs, and a transient revision |
+| `csp_capture` | An MCP image of the CSP window or a region of it, with a captureId |
+| `csp_compare_captures` | Share of changed pixels between two captures |
+| `csp_sample_pixel` | RGBA at normalized capture coordinates |
+| `csp_inspect_ui` | Win32 child windows and native dialogs |
+| `csp_list_commands` | The registered command catalog |
+| `csp_list_auto_actions` | Registered Auto Actions |
 
-## 应用和窗口
+## Application and window
 
-| 工具 | 功能 |
+| Tool | What it does |
 |---|---|
-| `csp_launch` | 启动固定 production CSP |
-| `csp_focus` | 恢复并聚焦 CSP |
-| `csp_window_action` | 恢复/最大化/最小化 |
-| `csp_wait_visual_change` | 等待截图达到阈值 |
-| `csp_cancel` | 仅向精确主窗口或唯一一个 CSP 标准对话框发送一次 Escape |
+| `csp_launch` | Launches the pinned CSP executable |
+| `csp_focus` | Restores and focuses CSP |
+| `csp_window_action` | Restore, maximize, or minimize |
+| `csp_wait_visual_change` | Waits for a capture to reach a change threshold |
+| `csp_cancel` | Sends one Escape, only to the exact main window or the single standard CSP dialog |
 
-## 可见界面输入
+## Visible UI input
 
-| 工具 | 功能 |
+| Tool | What it does |
 |---|---|
-| `csp_move_pointer` | 截图绑定的归一化移动 |
-| `csp_click` | 左/右/中键单击或双击 |
-| `csp_drag` | 平滑拖动或无笔压笔划 |
-| `csp_scroll` | 受限滚轮步数 |
-| `csp_type_text` | 不经剪贴板的 Unicode 文本 |
-| `csp_navigation_key` | 受限导航键 |
-| `csp_run_command` | 已登记快捷键命令 |
-| `csp_run_auto_action` | 已登记 Auto Action |
-| `csp_run_command_sequence` | 非破坏性登记命令序列 |
-| `csp_preflight` | 批准精确工具名/完整参数并聚焦 CSP；普通输入批准后必须重新截图 |
+| `csp_move_pointer` | Normalized pointer move bound to a capture |
+| `csp_click` | Left, right, or middle click or double-click |
+| `csp_drag` | A smoothed drag, or a stroke without pen pressure |
+| `csp_scroll` | A limited number of wheel steps |
+| `csp_type_text` | Unicode text, without the clipboard |
+| `csp_navigation_key` | Limited navigation keys |
+| `csp_run_command` | A registered shortcut command |
+| `csp_run_auto_action` | A registered Auto Action |
+| `csp_run_command_sequence` | A sequence of non-destructive registered commands |
+| `csp_preflight` | Approves an exact tool name with its full parameters and focuses CSP; ordinary input must capture again after approval |
 
-## 文件交换
+## File exchange
 
-| 工具 | 功能 |
+| Tool | What it does |
 |---|---|
-| `csp_validate_path` | 白名单、格式、重解析点和覆盖校验 |
-| `csp_list_assets` | 列出素材根内允许文件 |
-| `csp_file_info` | 大小、时间、SHA-256 |
-| `csp_scan_exports` | 扫描指定时间后的导出 |
-| `csp_wait_for_file` | 等待输出非空且稳定 |
-| `csp_open_document` | 向固定 CSP 派发白名单文件请求；只证明派发/窗口证据，需截图确认实际标签页或导入结果 |
-| `csp_native_file_dialog` | 以精确路径、意图、提交标志和 dialog HWND 令牌填写/提交原生文件对话框 |
+| `csp_validate_path` | Allowlist, format, reparse-point, and overwrite checks |
+| `csp_list_assets` | Lists allowed files inside an asset root |
+| `csp_file_info` | Size, timestamps, and SHA-256 |
+| `csp_scan_exports` | Finds exports changed after a given time |
+| `csp_wait_for_file` | Waits until an output is non-empty and stable |
+| `csp_open_document` | Asks the pinned CSP executable to open an allowlisted file; proves dispatch and window evidence only, so confirm the actual tab or import with a capture |
+| `csp_native_file_dialog` | Fills or submits a native file dialog with a token bound to the exact path, intent, submit flag, and dialog HWND |
 
-底层原语覆盖可见窗口、截图、受限键鼠、已登记命令/Auto Actions 和白名单文件交换。10 个原子输入工具在 Codex 配置层直通，但服务端全部要求由仍需人工批准的 `csp_preflight` 生成精确、单次令牌。任何可见标准 `#32770` 对话框都会撤销普通截图授权并阻止通用输入，只允许令牌绑定的专用文件对话框工具或精确取消。生产策略拒绝 `Ctrl+S`、被声明为文件 I/O 或未作无文件-I/O声明的 Auto Action、账号、云端与发布流程；服务无法解析 `.laf` 来证明声明真假。登记命令、管理员声明和前后截图只提高可见结果置信度，不构成文档/图层语义验证。CSP 没有公开的通用文档/图层对象 API，因此不存在可诚实实现的 `get_layers`、`set_brush_object` 或 headless render 等工具。
+## Boundaries
 
-## 本地分支：区域设置
+The primitives cover visible windows, captures, limited keyboard and mouse input, registered commands and Auto Actions, and allowlisted file exchange. The 10 atomic input tools pass through Codex's approval layer, but the server requires each to present an exact, single-use token from `csp_preflight`, which itself still needs human approval.
 
-普通控件默认接受任意 Windows 区域设置。原生文件对话框支持法语、英语和简体中文，并要求“打开”或“保存/导出”意图与经验证的控件 ID 一致。未知标签仍不可用。工具签名和确认要求没有变化；配置见 README。
+Any visible standard `#32770` dialog revokes ordinary capture authorization and blocks generic input; only the token-bound file-dialog tool or an exact cancel may act on it. Production policy refuses *Ctrl+S*, Auto Actions declared as file I/O or not attested as free of it, and account, cloud, and publishing workflows. The server cannot parse *.laf* files to prove such an attestation true.
+
+Registered commands, administrator attestations, and before-and-after captures raise confidence in visible results; they do not verify document or layer semantics. CSP has no public document or layer object API, so tools such as `get_layers`, `set_brush_object`, or a headless render cannot be implemented honestly.
+
+Ordinary controls accept any Windows culture. Native file dialogs are recognized in French, English, and Simplified Chinese, and the Open or Save/Export intent must agree with the validated control IDs; unknown labels are refused.

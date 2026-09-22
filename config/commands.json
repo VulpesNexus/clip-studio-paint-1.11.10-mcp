@@ -4,8 +4,8 @@
   "commands": [
     {
       "id": "ui.cancel",
-      "title": "取消当前操作",
-      "description": "发送 Escape，关闭菜单或取消当前未提交操作。",
+      "title": "Cancel the current operation",
+      "description": "Sends Escape to close a menu or cancel the current uncommitted operation.",
       "category": "ui",
       "effect": "ui",
       "risk": "low",
@@ -15,8 +15,8 @@
     },
     {
       "id": "document.new_dialog",
-      "title": "打开新建文档对话框",
-      "description": "使用 CSP 默认 Ctrl+N；只打开对话框，不自动确认。",
+      "title": "Open the New document dialog",
+      "description": "Uses the CSP default Ctrl+N. Only opens the dialog and never confirms it.",
       "category": "document",
       "effect": "ui",
       "risk": "low",
@@ -26,8 +26,8 @@
     },
     {
       "id": "document.open_dialog",
-      "title": "打开文件对话框",
-      "description": "使用 CSP 默认 Ctrl+O；优先使用 csp_open_document 打开白名单文件。",
+      "title": "Open the Open file dialog",
+      "description": "Uses the CSP default Ctrl+O. Prefer csp_open_document for allowlisted files.",
       "category": "document",
       "effect": "ui",
       "risk": "low",
@@ -37,8 +37,8 @@
     },
     {
       "id": "edit.undo",
-      "title": "撤销",
-      "description": "使用 CSP 默认 Ctrl+Z。",
+      "title": "Undo",
+      "description": "Uses the CSP default Ctrl+Z.",
       "category": "edit",
       "effect": "document",
       "risk": "modify",
@@ -48,8 +48,8 @@
     },
     {
       "id": "edit.redo",
-      "title": "重做",
-      "description": "使用 CSP 默认 Ctrl+Y。",
+      "title": "Redo",
+      "description": "Uses the CSP default Ctrl+Y.",
       "category": "edit",
       "effect": "document",
       "risk": "modify",
@@ -59,8 +59,8 @@
     },
     {
       "id": "selection.all",
-      "title": "全选",
-      "description": "使用 CSP 默认 Ctrl+A。",
+      "title": "Select all",
+      "description": "Uses the CSP default Ctrl+A.",
       "category": "selection",
       "effect": "document",
       "risk": "modify",
@@ -70,8 +70,8 @@
     },
     {
       "id": "selection.deselect",
-      "title": "取消选择",
-      "description": "使用 CSP 默认 Ctrl+D。",
+      "title": "Deselect",
+      "description": "Uses the CSP default Ctrl+D.",
       "category": "selection",
       "effect": "document",
       "risk": "modify",
@@ -81,8 +81,8 @@
     },
     {
       "id": "document.save_as_dialog",
-      "title": "打开另存为对话框",
-      "description": "使用 Ctrl+Shift+S；不会自动写入或确认路径。",
+      "title": "Open the Save As dialog",
+      "description": "Uses Ctrl+Shift+S. Never fills in or confirms a path.",
       "category": "document",
       "effect": "ui",
       "risk": "low",
@@ -92,8 +92,8 @@
     },
     {
       "id": "document.close",
-      "title": "关闭当前文档",
-      "description": "使用 Ctrl+W；可能触发未保存提示，必须先调用 csp_preflight。",
+      "title": "Close the current document",
+      "description": "Uses Ctrl+W. May raise an unsaved-changes prompt, so csp_preflight is required first.",
       "category": "document",
       "effect": "document",
       "risk": "destructive",

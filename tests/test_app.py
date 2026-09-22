@@ -27,6 +27,21 @@ class AppContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(preflight.annotations.destructiveHint)
         self.assertTrue(preflight.annotations.openWorldHint)
 
+    async def test_tool_text_shown_in_host_prompts_is_english(self) -> None:
+        # Hosts show titles and descriptions in approval prompts; keep them readable
+        # without a Chinese UI, as the upstream 5.1.2 profile assumed.
+        cjk = re.compile(r"[　-鿿＀-￯]")
+        for tool in await app.mcp.list_tools():
+            with self.subTest(tool=tool.name):
+                self.assertTrue(tool.title)
+                self.assertTrue(tool.description)
+                self.assertIsNone(cjk.search(tool.title))
+                self.assertIsNone(cjk.search(tool.description))
+        registry = (Path(__file__).resolve().parent.parent / "config" / "commands.json").read_text(
+            encoding="utf-8"
+        )
+        self.assertIsNone(cjk.search(registry))
+
     async def test_capture_returns_native_content_without_structured_base64_duplicate(self) -> None:
         with patch.object(
             app.controller,

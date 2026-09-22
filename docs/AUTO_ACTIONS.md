@@ -1,24 +1,20 @@
-# Auto Actions 接入
+# Auto Actions setup
 
-CSP 的 `.laf` 是专有动作数据。本 MCP 不解析或修改它。
-CELSYS 官方说明 Auto Actions 适用于 PRO/EX，不支持 DEBUT；已跟踪的
-`config/auto_actions.json` 是空模板，本机登记写入被 Git 忽略的
-`config/auto_actions.local.json`。
+CSP stores Auto Actions as proprietary *.laf* data, which this MCP neither parses nor modifies. CELSYS documents Auto Actions for PRO and EX; DEBUT does not have them. The tracked *config/auto_actions.json* is an empty template; local registrations go in *config/auto_actions.local.json*, which Git ignores.
 
-1. 在 CSP 的 Auto Action 面板创建并人工验证动作。
-2. 在 CSP 的快捷键设置中绑定 `Ctrl+Alt+F1..F12` 或 `Ctrl+Alt+Shift+F1..F12`；其他组合会被 production 校验拒绝。
-3. 关闭正在运行的 MCP，把 `config/auto_actions.json` 复制为
-   `config/auto_actions.local.json`，再把动作加入本机文件顶层的 `actions` 数组。完整文件结构示例：
+1. Create the action in CSP's *Auto Action* palette and check by hand that it does what you expect.
+2. In CSP's shortcut settings, bind it to *Ctrl+Alt+F1* through *F12* or *Ctrl+Alt+Shift+F1* through *F12*. Production validation refuses any other combination.
+3. Stop the running MCP, copy *config/auto_actions.json* to *config/auto_actions.local.json*, and add the action to the top-level `actions` array of the local file. A complete example:
 
 ```json
 {
   "schema_version": 1,
-  "profile_ids": ["csp-5.1.2-zh-CN-dpi120-v1", "csp-1.11.10-dpi96-v1"],
+  "profile_ids": ["csp-1.11.10-dpi96-v1"],
   "actions": [
     {
       "id": "layer.merge_visible_copy",
-      "title": "合并可见图层副本",
-      "description": "用户已在 CSP 内验证、且不包含打开/保存/导出的文档动作",
+      "title": "Merge visible layers into a copy",
+      "description": "A document action verified in CSP by the user; it does not open, save, or export anything",
       "effect": "document",
       "risk": "modify",
       "keys": ["CTRL", "ALT", "F9"],
@@ -30,12 +26,9 @@ CELSYS 官方说明 Auto Actions 适用于 PRO/EX，不支持 DEBUT；已跟踪�
 }
 ```
 
-4. 重启 Codex，调用 `csp_list_auto_actions` 核对登记结果。
-5. 先调用 `csp_preflight(operation="input", identifier="csp_run_auto_action", parameters_json='{"action_id":"..."}')`；用户批准后重新调用 `csp_capture`，最后把新 captureId 与单次 confirmToken 一起交给参数完全一致的 `csp_run_auto_action`。旧版 `operation="auto_action"` 仍作为兼容别名，但所有 Auto Action 都必须经过同一令牌流程。
+4. Restart Codex and call `csp_list_auto_actions` to check the registration.
+5. Call `csp_preflight(operation="input", identifier="csp_run_auto_action", parameters_json='{"action_id":"..."}')`. Once the user approves it, call `csp_capture` again, then pass the new captureId and the single-use confirmToken to `csp_run_auto_action` with exactly the same parameters. The older `operation="auto_action"` form still works as an alias, but every Auto Action goes through the same token flow.
 
-动作名称、快捷键、副作用和前置状态都由用户负责验证；MCP 只执行白名单组合键并比较前后截图。
+The user is responsible for verifying each action's name, shortcut, side effects, and preconditions. The MCP only sends allowlisted key combinations and compares captures before and after.
 
-生产配置拒绝所有 `effect: "filesystem"` 的 Auto Action，并要求显式填写
-`"attested_no_file_io": true`。原因不是 CSP 做不到保存，而是 MCP 无法检查专有
-`.laf` 内部是否写入了白名单之外的路径。打开、保存和导出应使用本 MCP 的路径校验与
-原生文件对话框工具。声明是管理员承诺，不是服务端对 `.laf` 内容的证明。
+Production configuration refuses every Auto Action with `effect: "filesystem"` and requires an explicit `"attested_no_file_io": true`. CSP can save from an Auto Action; the reason for the rule is that the MCP cannot inspect a proprietary *.laf* file to see whether it writes outside the allowlisted paths. Open, save, and export through this MCP's path validation and native file-dialog tools instead. The attestation is the administrator's promise, not something the server proves from the *.laf* contents.
