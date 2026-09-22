@@ -25,7 +25,10 @@ class ConfigurationTests(unittest.TestCase):
         tracked = config_module.CONFIG_DIR / config_module.TRACKED_CONFIG_NAME
         with patch.dict(os.environ, {config_module.CONFIG_ENV: str(tracked)}, clear=False):
             settings = load_settings()
-        self.assertEqual(settings.allowed_file_versions, ("5.1.2.0",))
+        self.assertEqual(settings.profile_id, "csp-1.11.10-dpi96-v1")
+        self.assertEqual(settings.allowed_file_versions, ("1.11.10.0",))
+        self.assertEqual(settings.expected_dpi, 96)
+        self.assertEqual(settings.expected_locale, "*")
         self.assertEqual(len(settings.allowed_sha256), 1)
         self.assertEqual(len(settings.allowed_sha256[0]), 64)
 
@@ -98,14 +101,14 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_public_reference_config_contains_no_machine_specific_paths(self) -> None:
         reference = (config_module.CONFIG_DIR / "config.json").read_text(encoding="utf-8")
-        self.assertIn("%APPDATA%", reference)
+        self.assertIn("%ProgramFiles%", reference)
         self.assertIn("%USERPROFILE%", reference)
         raw = json.loads(reference)
         configured_paths = [raw["csp_executable"]]
         configured_paths.extend(item["path"] for item in raw["shortcut_profile_files"])
         configured_paths.extend(item["path"] for item in raw["path_roots"])
         self.assertTrue(
-            all(path.startswith(("%APPDATA%\\", "%USERPROFILE%\\")) for path in configured_paths),
+            all(path.startswith(("%ProgramFiles%\\", "%USERPROFILE%\\")) for path in configured_paths),
             "The tracked configuration must use portable environment-rooted paths",
         )
         self.assertTrue(
@@ -357,7 +360,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_tracked_registries_list_exactly_the_configurable_profiles(self) -> None:
         script = (config_module.PROJECT_ROOT / "scripts" / "configure.ps1").read_text(encoding="utf-8")
         configurable = set(re.findall(r"ProfileId = '([^']+)'", script))
-        self.assertEqual(configurable, {"csp-5.1.2-zh-CN-dpi120-v1", "csp-1.11.10-dpi96-v1"})
+        self.assertEqual(configurable, {"csp-1.11.10-dpi96-v1"})
         for name in ("commands.json", "auto_actions.json"):
             with self.subTest(registry=name):
                 raw = config_module._read_json(config_module.CONFIG_DIR / name)

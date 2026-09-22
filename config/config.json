@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "profile_id": "csp-5.1.2-zh-CN-dpi120-v1",
-  "csp_executable": "%USERPROFILE%\\Applications\\CLIP STUDIO 1.5\\CLIP STUDIO PAINT\\CLIPStudioPaint.exe",
+  "profile_id": "csp-1.11.10-dpi96-v1",
+  "csp_executable": "%ProgramFiles%\\CELSYS\\CLIP STUDIO 1.5\\CLIP STUDIO PAINT\\CLIPStudioPaint.exe",
   "expected_company_contains": "CELSYS",
-  "allowed_file_versions": ["5.1.2.0"],
-  "allowed_sha256": ["A74C276B3D745E76791C4D81E60E56FA0F8D49ECA7661DCD1FD0DDE4030E8F30"],
-  "expected_dpi": 120,
+  "allowed_file_versions": ["1.11.10.0"],
+  "allowed_sha256": ["1BF5AA62E729D37797305E274D203F9BBA90EFB8388609B44512EA8B0F2B48E2"],
+  "expected_dpi": 96,
   "expected_locale": "*",
   "strict_profile_for_input": true,
   "shortcut_profile_files": [
     {
-      "path": "%APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\default.khc",
+      "path": "%USERPROFILE%\\Documents\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\default.khc",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     {
-      "path": "%APPDATA%\\CELSYSUserData\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\DefaultToolModifyKey.tomd",
+      "path": "%USERPROFILE%\\Documents\\CELSYS\\CLIPStudioPaintVer1_5_0\\Shortcut\\DefaultToolModifyKey.tomd",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     }
   ],

@@ -13,8 +13,8 @@ param(
     [string]$ExpectedLocale = '*',
 
     # Selects one of the validated profiles below; any other build is rejected.
-    [ValidateSet('5.1.2.0', '1.11.10.0')]
-    [string]$ExpectedVersion = '5.1.2.0'
+    [ValidateSet('1.11.10.0')]
+    [string]$ExpectedVersion = '1.11.10.0'
 )
 
 Set-StrictMode -Version Latest
@@ -22,11 +22,9 @@ $ErrorActionPreference = 'Stop'
 
 # One entry per validated CSP build.  commands.json and auto_actions.json declare
 # the profile ids they are valid for, and Dpi is the effective CSP window DPI the
-# profile was validated at.  CSP 1.x keeps user settings under Documents\CELSYS;
-# later builds keep them under %APPDATA%\CELSYSUserData.
+# profile was validated at.
 $KnownProfiles = @{
-    '5.1.2.0' = @{ ProfileId = 'csp-5.1.2-zh-CN-dpi120-v1'; Dpi = 120; SettingsRoot = 'AppData' }
-    '1.11.10.0' = @{ ProfileId = 'csp-1.11.10-dpi96-v1'; Dpi = 96; SettingsRoot = 'Documents' }
+    '1.11.10.0' = @{ ProfileId = 'csp-1.11.10-dpi96-v1'; Dpi = 96 }
 }
 # Not $Profile: PowerShell variables are case-insensitive and $PROFILE is automatic.
 $SelectedProfile = $KnownProfiles[$ExpectedVersion]
@@ -137,18 +135,30 @@ function Test-PathNestedOrEqual {
 
 try {
     if (-not $PSBoundParameters.ContainsKey('ShortcutProfileFiles')) {
-        if ($SelectedProfile.SettingsRoot -eq 'Documents') {
-            $SettingsDocuments = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments)
-            if ([string]::IsNullOrWhiteSpace($SettingsDocuments)) {
-                throw 'The Documents folder is unavailable; pass -ShortcutProfileFiles explicitly.'
-            }
-            $ShortcutDirectory = Join-Path $SettingsDocuments 'CELSYS\CLIPStudioPaintVer1_5_0\Shortcut'
-        } else {
-            if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
-                throw 'APPDATA is unavailable; pass -ShortcutProfileFiles explicitly.'
-            }
-            $ShortcutDirectory = Join-Path $env:APPDATA 'CELSYSUserData\CELSYS\CLIPStudioPaintVer1_5_0\Shortcut'
+        # CSP keeps its user settings in Documents\CELSYS until they are moved.
+        # From 1.10.13 on, new installations and the Move user data folder
+        # command use %APPDATA%\CELSYSUserData\CELSYS instead.  Accept exactly
+        # one of the two; anything else needs -ShortcutProfileFiles.
+        $SettingsRoots = @()
+        $SettingsDocuments = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments)
+        if (-not [string]::IsNullOrWhiteSpace($SettingsDocuments)) {
+            $SettingsRoots += (Join-Path $SettingsDocuments 'CELSYS')
         }
+        if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+            $SettingsRoots += (Join-Path $env:APPDATA 'CELSYSUserData\CELSYS')
+        }
+        $ShortcutDirectories = @(
+            $SettingsRoots |
+                ForEach-Object { Join-Path $_ 'CLIPStudioPaintVer1_5_0\Shortcut' } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+        )
+        if ($ShortcutDirectories.Count -eq 0) {
+            throw 'No CSP shortcut settings folder was found under Documents\CELSYS or %APPDATA%\CELSYSUserData\CELSYS; pass -ShortcutProfileFiles explicitly.'
+        }
+        if ($ShortcutDirectories.Count -gt 1) {
+            throw "CSP shortcut settings exist in both $($ShortcutDirectories -join ' and '); pass -ShortcutProfileFiles for the folder CSP actually uses."
+        }
+        $ShortcutDirectory = $ShortcutDirectories[0]
         $ShortcutProfileFiles = @(
             (Join-Path $ShortcutDirectory 'default.khc'),
             (Join-Path $ShortcutDirectory 'DefaultToolModifyKey.tomd')
