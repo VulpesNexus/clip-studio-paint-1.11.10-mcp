@@ -8,7 +8,7 @@ Evidence for the `csp-1.11.10-dpi96-v1` profile: CLIP STUDIO PAINT 1.11.10.0 at 
 - *configure.ps1*, run from a clean copy of the repository with the README's command, found the settings under *Documents\CELSYS*, and wrote profile `csp-1.11.10-dpi96-v1` with the same executable hash as the existing local configuration.
 - The unit suite passed on Python 3.14.6: 67 tests. CI runs it on Python 3.13.
 - The stdio smoke test passed all 18 checks against the running CSP; the concurrent read took 0.008 seconds against its 0.75-second budget.
-- Interactive acceptance: pending.
+- The interactive acceptance test passed. Through the registered `document.open_dialog` command it opened CSP's *Open* dialog (French labels), filled in the fixture path without submitting it, canceled that exact dialog, and compared captures before and after (1.5% of pixels changed, from focus). A first attempt stopped before opening anything because someone used the mouse or keyboard a second after the capture: the fail-closed behavior the token flow promises.
 
 ## 2026-09-10: profile added
 

@@ -1,5 +1,9 @@
 # Security model
 
+## Privacy boundary
+
+Local stdio means this server opens no network listener; it does **not** mean all MCP data stays on the machine. The MCP host receives tool inputs and outputs, including captures, visible UI text, window titles, and configured absolute paths, and may send them to a remote model under that host's data policy. Keep sensitive documents closed, review the host's privacy controls, and treat text or imagery shown inside CSP as untrusted data rather than instructions for the agent.
+
 ## What is allowed
 
 - Stdio, as a local process; no TCP port is opened.
