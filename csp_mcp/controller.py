@@ -55,6 +55,34 @@ class CaptureEntry:
 
 
 @dataclass
+class NewDialogCaptureEntry:
+    capture_id: str
+    created_monotonic: float
+    main_hwnd: int
+    main_fingerprint: str
+    dialog_hwnd: int
+    dialog_fingerprint: str
+    last_input_tick: int
+    control_generation: int
+    data: win.CaptureData
+    used: bool = False
+
+
+@dataclass
+class PageCopyCaptureEntry:
+    capture_id: str
+    created_monotonic: float
+    main_hwnd: int
+    main_fingerprint: str
+    warning_hwnd: int
+    warning_fingerprint: str
+    last_input_tick: int
+    control_generation: int
+    data: win.CaptureData
+    used: bool = False
+
+
+@dataclass
 class ConfirmationEntry:
     token: str
     created_monotonic: float
@@ -162,6 +190,10 @@ class CspController:
         self._control_generation = win.ControlGeneration("Local\\CspLocalMcp.Generation.v1")
         self._cache_lock = threading.RLock()
         self._captures: dict[str, CaptureEntry] = {}
+        self._new_dialog_captures: dict[str, NewDialogCaptureEntry] = {}
+        self._page_copy_captures: dict[str, PageCopyCaptureEntry] = {}
+        self._cst_conversion_captures: dict[str, PageCopyCaptureEntry] = {}
+        self._cst_story_captures: dict[str, PageCopyCaptureEntry] = {}
         self._confirmations: dict[str, ConfirmationEntry] = {}
         self._owned_input_tick: int | None = None
         self._state_counter = 0
@@ -327,6 +359,22 @@ class CspController:
             self._captures = {
                 key: value for key, value in self._captures.items()
                 if now - value.created_monotonic <= self.settings.capture_ttl_seconds
+            }
+            self._new_dialog_captures = {
+                key: value for key, value in self._new_dialog_captures.items()
+                if now - value.created_monotonic <= self.settings.capture_ttl_seconds and not value.used
+            }
+            self._page_copy_captures = {
+                key: value for key, value in self._page_copy_captures.items()
+                if now - value.created_monotonic <= self.settings.capture_ttl_seconds and not value.used
+            }
+            self._cst_conversion_captures = {
+                key: value for key, value in self._cst_conversion_captures.items()
+                if now - value.created_monotonic <= self.settings.capture_ttl_seconds and not value.used
+            }
+            self._cst_story_captures = {
+                key: value for key, value in self._cst_story_captures.items()
+                if now - value.created_monotonic <= self.settings.capture_ttl_seconds and not value.used
             }
             self._confirmations = {
                 key: value for key, value in self._confirmations.items()
@@ -582,6 +630,14 @@ class CspController:
         with self._cache_lock:
             for entry in self._captures.values():
                 entry.authorizable = False
+            for entry in self._new_dialog_captures.values():
+                entry.used = True
+            for entry in self._page_copy_captures.values():
+                entry.used = True
+            for entry in self._cst_conversion_captures.values():
+                entry.used = True
+            for entry in self._cst_story_captures.values():
+                entry.used = True
             for confirmation in self._confirmations.values():
                 confirmation.used = True
 
@@ -1047,11 +1103,21 @@ class CspController:
             record.pid,
             main_hwnd=record.hwnd,
         ) if include_dialogs else []
+        file_dialog_children = [
+            {
+                "dialogHwnd": dialog.hwnd,
+                "children": win.inspect_child_windows(dialog.hwnd, max_items=max_items),
+            }
+            for dialog in dialogs
+            if dialog.class_name == "#32770"
+            and win.window_belongs_to_main(dialog.hwnd, record.hwnd)
+        ]
         return ok_result(
             {
                 "window": record.public(),
                 "children": children,
                 "dialogs": [item.public() for item in dialogs],
+                "fileDialogChildren": file_dialog_children,
                 "limitations": [
                     "CSP is custom-drawn; Win32/UIA does not expose its menus, layers, or tool controls.",
                     "Use csp_capture plus capture-bound normalized input or registered shortcuts."
@@ -1524,6 +1590,969 @@ class CspController:
             require_capture=False,
             allow_standard_dialog=True,
         )
+
+    def cancel_expanded_new_dialog(self, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        """Recover from the exact expanded New modal with one Escape."""
+        if not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main and New-dialog HWNDs are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(
+                self.settings.csp_executable, main, dialog_hwnd,
+                allow_expanded=True, require_foreground=False,
+            )
+            if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != win.NEW_DIALOG_EXPANDED_SIZE:
+                raise BridgeError("E_POLICY_DENIED", "Cancel route requires the observed expanded New dialog", stage="validation")
+            if win.foreground_window() not in {main.hwnd, dialog.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or New dialog must be foreground with no held keys", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks New-dialog cancel")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != dialog.hwnd:
+                dialog = win.focus_window(dialog.hwnd, expected=dialog, expected_input_tick=tick)
+            current = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            if current.fingerprint != dialog.fingerprint or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "Expanded New dialog changed before Escape", retryable=True)
+            try:
+                win.send_expanded_new_dialog_escape(current, tick)
+            finally:
+                self._record_control_state_change()
+            still_visible = any(
+                item.hwnd == dialog_hwnd and item.visible
+                for item in win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True)
+            )
+            return ok_result(
+                {"key": "ESCAPE", "dialogWindowId": str(dialog_hwnd), "dialogStillVisible": still_visible},
+                state_change="possible" if still_visible else "confirmed",
+                verification={"method": ["exactExpandedNewDialogProfile", "foreground", "SendInput", "windowEnumeration"],
+                              "confidence": 0.6 if still_visible else 0.9},
+            )
+        finally:
+            lease.release()
+
+    def new_dialog_owner_diagnostic(self, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        if not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main and New-dialog HWNDs are required", stage="validation")
+        main = self._target(main_hwnd, for_input=False)
+        result = win.new_dialog_owner_diagnostic(self.settings.csp_executable, main, dialog_hwnd)
+        return ok_result(result, verification={"method": ["binaryIdentity", "exactNewDialogProfile", "foreground"], "confidence": 1.0})
+
+    def expanded_new_dialog_overlaps(self, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        main = self._target(main_hwnd, for_input=False)
+        result = win.inspect_expanded_new_dialog_overlaps(self.settings.csp_executable, main, dialog_hwnd)
+        return ok_result(result, verification={"method": ["binaryIdentity", "exactExpandedNewDialogProfile", "Win32ZOrder"], "confidence": 1.0})
+
+    def new_dialog_preflight(self, icon_index: int, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        """Approve only one profiled work-type icon in CSP 1.11.10's New dialog."""
+        if type(icon_index) is not int or icon_index not in range(1, 7) or not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main/dialog HWNDs and icon index 1..6 are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            if self._visible_standard_dialogs(main) or win.pressed_input_keys():
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog or held key blocks New-dialog input")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            win.assert_new_dialog_visible(dialog)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during New-dialog preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=time.monotonic(),
+                expires_monotonic=time.monotonic() + self.settings.confirmation_ttl_seconds,
+                operation="new_dialog_icon", identifier=str(icon_index), capture_id="", path="",
+                file_fingerprint="", control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=dialog.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=dialog.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "iconIndex": icon_index, "mainWindowId": str(main.hwnd),
+                 "dialogWindowId": str(dialog.hwnd), "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True},
+                state_change="confirmed", verification={"method": ["binaryIdentity", "exactDialogProfile", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def new_comic_multiple_pages_preflight(self, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        """Authorize one fixed checkbox click in the observed Comic New layout."""
+        if not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main and New-dialog HWNDs are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(
+                self.settings.csp_executable, main, dialog_hwnd,
+                allow_expanded=True, require_foreground=False,
+            )
+            if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != win.NEW_DIALOG_EXPANDED_SIZE:
+                raise BridgeError("E_POLICY_DENIED", "Multiple pages requires the expanded New layout", stage="validation")
+            if win.foreground_window() not in {main.hwnd, dialog.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or New dialog must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks Comic setup")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != dialog.hwnd:
+                dialog = win.focus_window(dialog.hwnd, expected=dialog, expected_input_tick=tick)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            win.assert_new_dialog_visible(dialog)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during Comic setup preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=now,
+                expires_monotonic=now + self.settings.confirmation_ttl_seconds,
+                operation="new_comic_multiple_pages", identifier="unchecked_to_checked", capture_id="", path="",
+                file_fingerprint="", control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=dialog.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=dialog.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "mainWindowId": str(main.hwnd),
+                 "dialogWindowId": str(dialog.hwnd), "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True,
+                 "nextStep": "Capture the Comic form; act only if Multiple pages is visibly unchecked"},
+                state_change="confirmed",
+                verification={"method": ["binaryIdentity", "exactExpandedNewDialogProfile", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def enable_new_comic_multiple_pages(
+        self, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int,
+    ) -> dict[str, Any]:
+        if not dialog_hwnd or not main_hwnd or not capture_id or not confirm_token:
+            raise BridgeError("E_POLICY_DENIED", "Exact dialog, capture, and confirmation are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != win.NEW_DIALOG_EXPANDED_SIZE:
+                raise BridgeError("E_POLICY_DENIED", "Multiple pages requires the expanded New layout", stage="validation")
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._new_dialog_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "Comic setup approval or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "new_comic_multiple_pages" or approval.identifier != "unchecked_to_checked"
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != dialog.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != dialog.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.dialog_hwnd != dialog.hwnd or capture.dialog_fingerprint != dialog.fingerprint
+                or (capture.data.width, capture.data.height) != win.NEW_DIALOG_EXPANDED_SIZE
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "Comic setup approval, capture, or input state changed", retryable=True)
+            before = win.capture_new_dialog(dialog)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "Comic New dialog pixels changed after capture", retryable=True)
+            self._check_cancelled()
+            try:
+                point = win.enable_new_comic_multiple_pages(dialog, tick)
+            finally:
+                self._record_control_state_change()
+            return ok_result(
+                {"screenPoint": list(point), "requiresFreshCapture": True},
+                state_change="possible",
+                verification={"method": ["exactExpandedNewDialogProfile", "pixelMatch", "SendInput"], "confidence": 0.55},
+                warnings=["Capture the form again and verify Multiple pages is enabled before entering page settings."],
+            )
+        finally:
+            lease.release()
+
+    def new_comic_confirm_preflight(self, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        """Approve one OK click after a fresh expanded-Comic capture."""
+        if not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main and New-dialog HWNDs are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(
+                self.settings.csp_executable, main, dialog_hwnd,
+                allow_expanded=True, require_foreground=False,
+            )
+            if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != win.NEW_DIALOG_EXPANDED_SIZE:
+                raise BridgeError("E_POLICY_DENIED", "Comic confirmation requires the expanded New layout", stage="validation")
+            if win.foreground_window() not in {main.hwnd, dialog.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or New dialog must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks New confirmation")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != dialog.hwnd:
+                dialog = win.focus_window(dialog.hwnd, expected=dialog, expected_input_tick=tick)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            win.assert_new_dialog_visible(dialog)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during Comic confirmation preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=now,
+                expires_monotonic=now + self.settings.confirmation_ttl_seconds,
+                operation="new_comic_confirm", identifier="blank_comic", capture_id="", path="",
+                file_fingerprint="", control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=dialog.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=dialog.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "mainWindowId": str(main.hwnd),
+                 "dialogWindowId": str(dialog.hwnd), "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True,
+                 "nextStep": "Capture the expanded New dialog, verify blank Comic settings, then confirm once"},
+                state_change="confirmed",
+                verification={"method": ["binaryIdentity", "exactExpandedNewDialogProfile", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def confirm_blank_comic(
+        self, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int,
+    ) -> dict[str, Any]:
+        if not dialog_hwnd or not main_hwnd or not capture_id or not confirm_token:
+            raise BridgeError("E_POLICY_DENIED", "Exact dialog, capture, and confirmation are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != win.NEW_DIALOG_EXPANDED_SIZE:
+                raise BridgeError("E_POLICY_DENIED", "Comic confirmation requires the expanded New layout", stage="validation")
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._new_dialog_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "Comic confirmation or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "new_comic_confirm" or approval.identifier != "blank_comic"
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != dialog.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != dialog.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.dialog_hwnd != dialog.hwnd or capture.dialog_fingerprint != dialog.fingerprint
+                or (capture.data.width, capture.data.height) != win.NEW_DIALOG_EXPANDED_SIZE
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "Comic confirmation, capture, or input state changed", retryable=True)
+            before = win.capture_new_dialog(dialog)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "Comic New dialog pixels changed after capture", retryable=True)
+            self._check_cancelled()
+            try:
+                point = win.confirm_expanded_new_dialog(dialog, tick)
+            finally:
+                self._record_control_state_change()
+            still_visible = any(
+                item.hwnd == dialog_hwnd and item.visible
+                for item in win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True)
+            )
+            return ok_result(
+                {"screenPoint": list(point), "dialogStillVisible": still_visible},
+                state_change="possible" if still_visible else "confirmed",
+                verification={"method": ["exactExpandedNewDialogProfile", "pixelMatch", "SendInput", "windowEnumeration"],
+                              "confidence": 0.55 if still_visible else 0.8},
+                warnings=["Verify the new document visually; CSP exposes no document-object API and this action does not save it."],
+            )
+        finally:
+            lease.release()
+
+    def _verified_cst_copy(self, path: str) -> tuple[str, str]:
+        """Bind a CST input to the exact isolated-copy manifest and current bytes."""
+        validated = self.path_policy.validate(path, "input")
+        if validated.path.suffix.casefold() != ".cst":
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "CST conversion requires the isolated copy root", stage="validation")
+        if validated.root.id == "cst_ascii_copy":
+            return self._verified_ascii_cst_copy(validated.path)
+        if validated.root.id != "cst_copy":
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "CST conversion requires an isolated copy root", stage="validation")
+        copy_root = validated.root.path.resolve(strict=True)
+        target = validated.path.resolve(strict=True)
+        relative = str(target.relative_to(copy_root)).replace("/", "\\")
+        allowed = {
+            r"cs4-SampleData_1\CS4DemoSample.cst",
+            r"cs4-Sample_5_comic\CS4.0Sample_5_comic.cst",
+            r"cs4-Sample_7\CS4.0Sample_7.cst",
+        }
+        if relative not in allowed:
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "CST project is not one of the three isolated copies", stage="validation")
+        manifest_path = copy_root / "copy-manifest.json"
+        if (manifest_path.is_symlink() or not manifest_path.is_file()
+                or manifest_path.stat().st_size > 1024 * 1024):
+            raise BridgeError("E_POLICY_DENIED", "CST copy manifest is missing or too large", stage="validation")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            entries = [item for item in manifest["files"] if item.get("path") == relative]
+            if (Path(manifest["copy"]).resolve(strict=True) != copy_root
+                    or len(entries) != 1
+                    or entries[0]["sha256"].upper() != file_sha256(target)
+                    or entries[0]["bytes"] != target.stat().st_size):
+                raise ValueError("CST copy manifest does not match the selected file")
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise BridgeError("E_POLICY_DENIED", "CST copy manifest failed verification", stage="validation") from exc
+        return str(target), file_sha256(manifest_path) + ":" + entries[0]["sha256"].upper()
+
+    def _verified_ascii_cst_copy(self, path: Path) -> tuple[str, str]:
+        """Verify one profiled ASCII-path CST subtree against the workspace manifest."""
+        ascii_root = self.settings.root("cst_ascii_copy").path.resolve(strict=True)
+        target = path.resolve(strict=True)
+        projects = {
+            r"cs4-SampleData_1\CS4DemoSample.cst": ("cs4-SampleData_1", 492),
+            r"cs4-Sample_5_comic\CS4.0Sample_5_comic.cst": ("cs4-Sample_5_comic", 201),
+            r"cs4-Sample_7\CS4.0Sample_7.cst": ("cs4-Sample_7", 296),
+        }
+        try:
+            relative = str(target.relative_to(ascii_root)).replace("/", "\\")
+        except ValueError as exc:
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "ASCII CST target escapes its exact root", stage="validation") from exc
+        project = projects.get(relative)
+        if project is None:
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "ASCII CST target is not one of the three profiled copies", stage="validation")
+        project_name, expected_count = project
+        workspace_root = self.settings.root("cst_copy").path.resolve(strict=True)
+        manifest_path = workspace_root / "copy-manifest.json"
+        if (manifest_path.is_symlink() or not manifest_path.is_file()
+                or manifest_path.stat().st_size > 1024 * 1024):
+            raise BridgeError("E_POLICY_DENIED", "Original copy manifest is missing or too large", stage="validation")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if Path(manifest["copy"]).resolve(strict=True) != workspace_root:
+                raise ValueError("Manifest copy root changed")
+            records = [item for item in manifest["files"]
+                       if isinstance(item, dict) and isinstance(item.get("path"), str)
+                       and item["path"].startswith(project_name + "\\")]
+            expected = {item["path"]: item for item in records}
+            project_root = ascii_root / project_name
+            if project_root.is_symlink() or not project_root.is_dir():
+                raise ValueError("ASCII project root is missing or redirected")
+            actual = {str(item.relative_to(ascii_root)).replace("/", "\\"): item
+                      for item in project_root.rglob("*") if item.is_file() or item.is_symlink()}
+            if len(records) != expected_count or len(expected) != expected_count or set(actual) != set(expected):
+                raise ValueError("ASCII copy inventory differs from manifest")
+            for relative, item in actual.items():
+                record = expected[relative]
+                if (item.is_symlink() or not item.resolve(strict=True).is_relative_to(project_root)
+                        or item.stat().st_size != record["bytes"]
+                        or file_sha256(item) != record["sha256"].upper()):
+                    raise ValueError("ASCII copy bytes differ from manifest")
+        except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise BridgeError("E_POLICY_DENIED", "ASCII CST copy failed manifest verification", stage="validation") from exc
+        return str(target), file_sha256(manifest_path) + ":" + file_sha256(target)
+
+    def _verified_cst_story_destination(self, copy_path: str) -> tuple[str, str, str, str]:
+        path, copy_fingerprint = self._verified_cst_copy(copy_path)
+        validated = self.path_policy.validate(copy_path, "input")
+        copy_root = validated.root.path.resolve(strict=True)
+        if validated.root.id == "cst_copy":
+            folder_names = {
+                copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst": "cs4-SampleData_1Copy",
+                copy_root / "cs4-Sample_5_comic" / "CS4.0Sample_5_comic.cst": "cs4-Sample_5_comicCopy",
+            }
+        elif validated.root.id == "cst_ascii_copy":
+            folder_names = {
+                copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst": "cs4-SampleData_1Copy",
+                copy_root / "cs4-Sample_5_comic" / "CS4.0Sample_5_comic.cst": "cs4-Sample_5_comicCopy",
+                copy_root / "cs4-Sample_7" / "CS4.0Sample_7.cst": "cs4-Sample_7Copy",
+            }
+        else:
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "Story-folder route requires an isolated CST root", stage="validation")
+        folder_name = folder_names.get(Path(path))
+        if folder_name is None:
+            raise BridgeError("E_PATH_OUTSIDE_ALLOWLIST", "Story-folder route requires a profiled CST copy", stage="validation")
+        folder = copy_root / folder_name
+        if folder.exists() or folder.is_symlink() or folder.parent.resolve(strict=True) != copy_root:
+            raise BridgeError("E_OUTPUT_EXISTS", "Profiled story folder already exists or escapes the copy root", stage="validation")
+        management_file = folder / (folder_name + ".cmc")
+        return path, copy_fingerprint, str(folder), str(management_file)
+
+    def cst_conversion_preflight(self, copy_path: str, warning_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        if not warning_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact CST warning and main HWNDs are required", stage="validation")
+        path, copy_fingerprint = self._verified_cst_copy(copy_path)
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            warning = win.verified_cst_conversion_warning(
+                self.settings.csp_executable, main, warning_hwnd, require_foreground=False,
+            )
+            if win.foreground_window() not in {main.hwnd, warning.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or CST warning must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks CST conversion")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != warning.hwnd:
+                warning = win.focus_window(warning.hwnd, expected=warning, expected_input_tick=tick)
+            warning = win.verified_cst_conversion_warning(self.settings.csp_executable, main, warning_hwnd)
+            win.assert_new_dialog_visible(warning)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during CST preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=now,
+                expires_monotonic=now + self.settings.confirmation_ttl_seconds,
+                operation="cst_conversion_ok", identifier="copied_cst", capture_id="", path=path,
+                file_fingerprint=copy_fingerprint, control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=warning.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=warning.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "copyPath": path, "copyFingerprint": copy_fingerprint,
+                 "mainWindowId": str(main.hwnd), "warningWindowId": str(warning.hwnd),
+                 "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True},
+                state_change="confirmed",
+                verification={"method": ["binaryIdentity", "exactCstWarningProfile", "copyManifestSha256", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def capture_cst_conversion_warning(self, warning_hwnd: int, main_hwnd: int) -> tuple[dict[str, Any], bytes]:
+        main = self._target(main_hwnd, for_input=True)
+        warning = win.verified_cst_conversion_warning(self.settings.csp_executable, main, warning_hwnd)
+        if self._visible_standard_dialogs(main):
+            raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks CST warning capture")
+        tick_before = win.get_last_input()[0]
+        generation_before = self._control_generation.current()
+        data = win.capture_cst_conversion_warning(warning)
+        tick_after = win.get_last_input()[0]
+        current = win.verified_cst_conversion_warning(self.settings.csp_executable, main, warning_hwnd)
+        if (tick_after != tick_before or generation_before != self._control_generation.current()
+                or current.fingerprint != warning.fingerprint):
+            raise BridgeError("E_STALE_CAPTURE", "CST warning changed during capture", retryable=True)
+        entry = PageCopyCaptureEntry(
+            capture_id=str(uuid.uuid4()), created_monotonic=time.monotonic(),
+            main_hwnd=main.hwnd, main_fingerprint=main.fingerprint,
+            warning_hwnd=warning.hwnd, warning_fingerprint=warning.fingerprint,
+            last_input_tick=tick_after, control_generation=generation_before, data=data,
+        )
+        self._purge_expired()
+        with self._cache_lock:
+            self._cst_conversion_captures[entry.capture_id] = entry
+            while len(self._cst_conversion_captures) > 8:
+                oldest = min(self._cst_conversion_captures.values(), key=lambda item: item.created_monotonic)
+                self._cst_conversion_captures.pop(oldest.capture_id, None)
+        return ({
+            "captureId": entry.capture_id, "windowId": str(warning.hwnd),
+            "mainWindowId": str(main.hwnd), "processId": warning.pid,
+            "lastInputTick": tick_after, "controlGeneration": generation_before,
+            "warningFingerprint": warning.fingerprint, "screenRect": list(data.rect),
+            "width": data.width, "height": data.height, "sha256": data.sha256,
+            "expiresInSeconds": self.settings.capture_ttl_seconds,
+        }, data.png)
+
+    def accept_cst_conversion_warning(
+        self, copy_path: str, capture_id: str, confirm_token: str, warning_hwnd: int, main_hwnd: int,
+    ) -> dict[str, Any]:
+        if not capture_id or not confirm_token or not warning_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact CST copy, capture, token, and HWNDs are required", stage="validation")
+        path, copy_fingerprint = self._verified_cst_copy(copy_path)
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            warning = win.verified_cst_conversion_warning(self.settings.csp_executable, main, warning_hwnd)
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._cst_conversion_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "CST warning token or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "cst_conversion_ok" or approval.identifier != "copied_cst"
+                or approval.path != path or approval.file_fingerprint != copy_fingerprint
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != warning.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != warning.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.warning_hwnd != warning.hwnd or capture.warning_fingerprint != warning.fingerprint
+                or (capture.data.width, capture.data.height) != win.CST_CONVERSION_WARNING_SIZE
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "CST warning approval, capture, or input state changed", retryable=True)
+            before = win.capture_cst_conversion_warning(warning)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "CST warning pixels changed after capture", retryable=True)
+            self._check_cancelled()
+            try:
+                point = win.accept_cst_conversion_warning(warning, tick)
+            finally:
+                self._record_control_state_change()
+            still_visible = any(item.hwnd == warning_hwnd and item.visible
+                                for item in win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True))
+            return ok_result(
+                {"screenPoint": list(point), "warningStillVisible": still_visible, "copyPath": path},
+                state_change="possible",
+                verification={"method": ["exactCstWarningProfile", "copyManifestSha256", "pixelMatch", "SendInput", "windowEnumeration"],
+                              "confidence": 0.55 if still_visible else 0.8},
+                warnings=["Inspect the converted project and rehash the external originals; CSP exposes no project-object API."],
+            )
+        finally:
+            lease.release()
+
+    def cst_story_folder_preflight(self, copy_path: str, dialog_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        if not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact story-folder dialog and main HWNDs are required", stage="validation")
+        path, fingerprint, folder, management_file = self._verified_cst_story_destination(copy_path)
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_cst_story_folder_dialog(
+                self.settings.csp_executable, main, dialog_hwnd, require_foreground=False,
+            )
+            if win.foreground_window() not in {main.hwnd, dialog.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or story-folder dialog must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks story-folder creation")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != dialog.hwnd:
+                dialog = win.focus_window(dialog.hwnd, expected=dialog, expected_input_tick=tick)
+            dialog = win.verified_cst_story_folder_dialog(self.settings.csp_executable, main, dialog_hwnd)
+            win.assert_new_dialog_visible(dialog)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during story-folder preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=now,
+                expires_monotonic=now + self.settings.confirmation_ttl_seconds,
+                operation="cst_story_folder_ok", identifier="profiled_copy_story_folder", capture_id="", path=folder,
+                file_fingerprint=fingerprint, control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=dialog.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=dialog.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "copyPath": path, "targetFolder": folder,
+                 "managementFile": management_file, "mainWindowId": str(main.hwnd),
+                 "dialogWindowId": str(dialog.hwnd), "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True},
+                state_change="confirmed",
+                verification={"method": ["binaryIdentity", "exactStoryFolderProfile", "copyManifestSha256", "newFolder", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def capture_cst_story_folder_dialog(self, dialog_hwnd: int, main_hwnd: int) -> tuple[dict[str, Any], bytes]:
+        main = self._target(main_hwnd, for_input=True)
+        dialog = win.verified_cst_story_folder_dialog(self.settings.csp_executable, main, dialog_hwnd)
+        if self._visible_standard_dialogs(main):
+            raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks story-folder capture")
+        tick_before = win.get_last_input()[0]
+        generation_before = self._control_generation.current()
+        data = win.capture_cst_story_folder_dialog(dialog)
+        tick_after = win.get_last_input()[0]
+        current = win.verified_cst_story_folder_dialog(self.settings.csp_executable, main, dialog_hwnd)
+        if (tick_after != tick_before or generation_before != self._control_generation.current()
+                or current.fingerprint != dialog.fingerprint):
+            raise BridgeError("E_STALE_CAPTURE", "Story-folder dialog changed during capture", retryable=True)
+        entry = PageCopyCaptureEntry(
+            capture_id=str(uuid.uuid4()), created_monotonic=time.monotonic(),
+            main_hwnd=main.hwnd, main_fingerprint=main.fingerprint,
+            warning_hwnd=dialog.hwnd, warning_fingerprint=dialog.fingerprint,
+            last_input_tick=tick_after, control_generation=generation_before, data=data,
+        )
+        self._purge_expired()
+        with self._cache_lock:
+            self._cst_story_captures[entry.capture_id] = entry
+            while len(self._cst_story_captures) > 8:
+                oldest = min(self._cst_story_captures.values(), key=lambda item: item.created_monotonic)
+                self._cst_story_captures.pop(oldest.capture_id, None)
+        return ({
+            "captureId": entry.capture_id, "windowId": str(dialog.hwnd),
+            "mainWindowId": str(main.hwnd), "processId": dialog.pid,
+            "lastInputTick": tick_after, "controlGeneration": generation_before,
+            "dialogFingerprint": dialog.fingerprint, "screenRect": list(data.rect),
+            "width": data.width, "height": data.height, "sha256": data.sha256,
+            "expiresInSeconds": self.settings.capture_ttl_seconds,
+        }, data.png)
+
+    def confirm_cst_story_folder(
+        self, copy_path: str, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int,
+    ) -> dict[str, Any]:
+        if not capture_id or not confirm_token or not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact story-folder copy, capture, token, and HWNDs are required", stage="validation")
+        path, fingerprint, folder, management_file = self._verified_cst_story_destination(copy_path)
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_cst_story_folder_dialog(self.settings.csp_executable, main, dialog_hwnd)
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._cst_story_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "Story-folder token or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "cst_story_folder_ok" or approval.identifier != "profiled_copy_story_folder"
+                or approval.path != folder or approval.file_fingerprint != fingerprint
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != dialog.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != dialog.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.warning_hwnd != dialog.hwnd or capture.warning_fingerprint != dialog.fingerprint
+                or (capture.data.width, capture.data.height) != win.CST_STORY_FOLDER_SIZE
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "Story-folder approval, capture, or input state changed", retryable=True)
+            before = win.capture_cst_story_folder_dialog(dialog)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "Story-folder pixels changed after capture", retryable=True)
+            self._verified_cst_story_destination(path)
+            self._check_cancelled()
+            try:
+                point = win.confirm_cst_story_folder_dialog(dialog, tick)
+            finally:
+                self._record_control_state_change()
+            still_visible = any(item.hwnd == dialog_hwnd and item.visible
+                                for item in win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True))
+            return ok_result(
+                {"screenPoint": list(point), "dialogStillVisible": still_visible,
+                 "copyPath": path, "targetFolder": folder, "managementFile": management_file},
+                state_change="possible",
+                verification={"method": ["exactStoryFolderProfile", "copyManifestSha256", "pixelMatch", "SendInput", "windowEnumeration"],
+                              "confidence": 0.55 if still_visible else 0.8},
+                warnings=["Inspect the new management folder and rehash the external originals; CSP has no project-object API."],
+            )
+        finally:
+            lease.release()
+
+    def cancel_cst_conversion_error(self, error_hwnd: int, main_hwnd: int) -> dict[str, Any]:
+        if not error_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact CST error and main HWNDs are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            error = win.verified_cst_conversion_error(
+                self.settings.csp_executable, main, error_hwnd, require_foreground=False,
+            )
+            if win.foreground_window() not in {main.hwnd, error.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or exact CST error must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks CST error dismissal")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != error.hwnd:
+                error = win.focus_window(error.hwnd, expected=error, expected_input_tick=tick)
+            error = win.verified_cst_conversion_error(self.settings.csp_executable, main, error_hwnd)
+            win.assert_new_dialog_visible(error)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during CST error dismissal", retryable=True)
+            self._check_cancelled()
+            try:
+                win.send_cst_conversion_error_escape(error, tick)
+            finally:
+                self._record_control_state_change()
+            still_visible = any(item.hwnd == error_hwnd and item.visible
+                                for item in win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True))
+            return ok_result(
+                {"errorWindowId": str(error_hwnd), "stillVisible": still_visible, "key": "ESCAPE"},
+                state_change="possible" if still_visible else "confirmed",
+                verification={"method": ["exactCstErrorProfile", "foreground", "inputTick", "SendInput", "windowEnumeration"],
+                              "confidence": 0.55 if still_visible else 0.8},
+            )
+        finally:
+            lease.release()
+
+    def page_copy_warning_preflight(
+        self, choice: str, warning_hwnd: int, main_hwnd: int, target_path: str = "",
+    ) -> dict[str, Any]:
+        if choice not in {"proceed_copy", "cancel"} or not warning_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact warning, main HWNDs, and choice are required", stage="validation")
+        if choice == "proceed_copy":
+            validated = self.path_policy.validate(target_path, "output_new")
+            path = str(validated.path)
+        elif target_path:
+            raise BridgeError("E_POLICY_DENIED", "Cancel cannot bind an output path", stage="validation")
+        else:
+            path = ""
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            warning = win.verified_page_copy_warning(
+                self.settings.csp_executable, main, warning_hwnd, require_foreground=False,
+            )
+            if win.foreground_window() not in {main.hwnd, warning.hwnd} or win.pressed_input_keys():
+                raise BridgeError("E_USER_INTERRUPTED", "CSP main or exact page-copy warning must be foreground", retryable=True)
+            if self._visible_standard_dialogs(main):
+                raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks page-copy warning input")
+            tick = win.get_last_input()[0]
+            self._record_control_state_change()
+            if win.foreground_window() != warning.hwnd:
+                warning = win.focus_window(warning.hwnd, expected=warning, expected_input_tick=tick)
+            warning = win.verified_page_copy_warning(self.settings.csp_executable, main, warning_hwnd)
+            win.assert_new_dialog_visible(warning)
+            if win.get_last_input()[0] != tick:
+                raise BridgeError("E_USER_INTERRUPTED", "Input changed during page-copy preflight", retryable=True)
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            entry = ConfirmationEntry(
+                token=token, created_monotonic=now,
+                expires_monotonic=now + self.settings.confirmation_ttl_seconds,
+                operation="page_copy_choice", identifier=choice, capture_id="", path=path,
+                file_fingerprint="", control_generation=self._control_generation.current(),
+                main_hwnd=main.hwnd, dialog_hwnd=warning.hwnd,
+                main_fingerprint=main.fingerprint, dialog_fingerprint=warning.fingerprint,
+                last_input_tick=tick,
+            )
+            self._purge_expired()
+            with self._cache_lock:
+                self._confirmations[token] = entry
+            return ok_result(
+                {"confirmToken": token, "choice": choice, "targetPath": path,
+                 "mainWindowId": str(main.hwnd), "warningWindowId": str(warning.hwnd),
+                 "expiresInSeconds": self.settings.confirmation_ttl_seconds,
+                 "singleUse": True, "captureRequiredAfterPreflight": True},
+                state_change="confirmed",
+                verification={"method": ["binaryIdentity", "exactPageCopyWarningProfile", "foreground", "inputTick"], "confidence": 1.0},
+            )
+        finally:
+            lease.release()
+
+    def capture_page_copy_warning(self, warning_hwnd: int, main_hwnd: int) -> tuple[dict[str, Any], bytes]:
+        main = self._target(main_hwnd, for_input=True)
+        warning = win.verified_page_copy_warning(self.settings.csp_executable, main, warning_hwnd)
+        if self._visible_standard_dialogs(main):
+            raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "A standard dialog blocks page-copy capture")
+        tick_before = win.get_last_input()[0]
+        generation_before = self._control_generation.current()
+        data = win.capture_page_copy_warning(warning)
+        tick_after = win.get_last_input()[0]
+        current = win.verified_page_copy_warning(self.settings.csp_executable, main, warning_hwnd)
+        if (tick_after != tick_before or generation_before != self._control_generation.current()
+                or current.fingerprint != warning.fingerprint):
+            raise BridgeError("E_STALE_CAPTURE", "Page-copy warning changed during capture", retryable=True)
+        entry = PageCopyCaptureEntry(
+            capture_id=str(uuid.uuid4()), created_monotonic=time.monotonic(),
+            main_hwnd=main.hwnd, main_fingerprint=main.fingerprint,
+            warning_hwnd=warning.hwnd, warning_fingerprint=warning.fingerprint,
+            last_input_tick=tick_after, control_generation=generation_before, data=data,
+        )
+        self._purge_expired()
+        with self._cache_lock:
+            self._page_copy_captures[entry.capture_id] = entry
+            while len(self._page_copy_captures) > 8:
+                oldest = min(self._page_copy_captures.values(), key=lambda item: item.created_monotonic)
+                self._page_copy_captures.pop(oldest.capture_id, None)
+        return ({
+            "captureId": entry.capture_id, "windowId": str(warning.hwnd),
+            "mainWindowId": str(main.hwnd), "processId": warning.pid,
+            "lastInputTick": tick_after, "controlGeneration": generation_before,
+            "warningFingerprint": warning.fingerprint, "screenRect": list(data.rect),
+            "width": data.width, "height": data.height, "sha256": data.sha256,
+            "expiresInSeconds": self.settings.capture_ttl_seconds,
+        }, data.png)
+
+    def choose_page_copy_warning(
+        self, choice: str, capture_id: str, confirm_token: str,
+        warning_hwnd: int, main_hwnd: int, target_path: str = "",
+    ) -> dict[str, Any]:
+        if choice not in {"proceed_copy", "cancel"} or not capture_id or not confirm_token:
+            raise BridgeError("E_POLICY_DENIED", "Exact warning choice, capture, and token are required", stage="validation")
+        if choice == "proceed_copy":
+            path = str(self.path_policy.validate(target_path, "output_new").path)
+        elif target_path:
+            raise BridgeError("E_POLICY_DENIED", "Cancel cannot bind an output path", stage="validation")
+        else:
+            path = ""
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            warning = win.verified_page_copy_warning(self.settings.csp_executable, main, warning_hwnd)
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._page_copy_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "Page-copy warning token or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "page_copy_choice" or approval.identifier != choice or approval.path != path
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != warning.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != warning.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.warning_hwnd != warning.hwnd or capture.warning_fingerprint != warning.fingerprint
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "Page-copy warning approval, capture, or input state changed", retryable=True)
+            before = win.capture_page_copy_warning(warning)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "Page-copy warning pixels changed after capture", retryable=True)
+            if path:
+                self.path_policy.validate(path, "output_new")
+            self._check_cancelled()
+            try:
+                point = win.choose_page_copy_warning(warning, choice, tick)
+            finally:
+                self._record_control_state_change()
+            dialogs = win.enum_csp_windows(self.settings.csp_executable, include_dialogs=True)
+            still_visible = any(item.hwnd == warning_hwnd and item.visible for item in dialogs)
+            followups = [item.public() for item in dialogs if item.class_name == "#32770" and item.visible]
+            return ok_result(
+                {"choice": choice, "screenPoint": list(point), "warningStillVisible": still_visible,
+                 "intendedTargetPath": path, "standardDialogCandidates": followups},
+                state_change="possible" if still_visible else "confirmed",
+                verification={"method": ["exactPageCopyWarningProfile", "pixelMatch", "SendInput", "windowEnumeration"],
+                              "confidence": 0.55 if still_visible else 0.8},
+                warnings=["No output path was entered or submitted. Verify any follow-up file dialog and its ownership before path input."],
+            )
+        finally:
+            lease.release()
+
+    def capture_new_dialog(self, dialog_hwnd: int, main_hwnd: int) -> tuple[dict[str, Any], bytes]:
+        main = self._target(main_hwnd, for_input=True)
+        dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+        if self._visible_standard_dialogs(main):
+            raise BridgeError("E_DEDICATED_DIALOG_TOOL_REQUIRED", "Use the native file-dialog tool for standard dialogs")
+        tick_before = win.get_last_input()[0]
+        generation_before = self._control_generation.current()
+        data = win.capture_new_dialog(dialog)
+        tick_after = win.get_last_input()[0]
+        current = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+        if (tick_after != tick_before or generation_before != self._control_generation.current()
+                or current.fingerprint != dialog.fingerprint):
+            raise BridgeError("E_STALE_CAPTURE", "New dialog changed during capture", retryable=True)
+        entry = NewDialogCaptureEntry(
+            capture_id=str(uuid.uuid4()), created_monotonic=time.monotonic(),
+            main_hwnd=main.hwnd, main_fingerprint=main.fingerprint,
+            dialog_hwnd=dialog.hwnd, dialog_fingerprint=dialog.fingerprint,
+            last_input_tick=tick_after, control_generation=generation_before, data=data,
+        )
+        self._purge_expired()
+        with self._cache_lock:
+            self._new_dialog_captures[entry.capture_id] = entry
+            while len(self._new_dialog_captures) > 8:
+                oldest = min(self._new_dialog_captures.values(), key=lambda item: item.created_monotonic)
+                self._new_dialog_captures.pop(oldest.capture_id, None)
+        return ({
+            "captureId": entry.capture_id, "windowId": str(dialog.hwnd), "mainWindowId": str(main.hwnd),
+            "processId": dialog.pid, "lastInputTick": tick_after,
+            "controlGeneration": generation_before, "dialogFingerprint": dialog.fingerprint,
+            "screenRect": list(data.rect), "width": data.width, "height": data.height,
+            "sha256": data.sha256, "expiresInSeconds": self.settings.capture_ttl_seconds,
+            "authorizableForWorkIcon": (data.width, data.height) in {win.NEW_DIALOG_SIZE, win.NEW_DIALOG_EXPANDED_SIZE},
+        }, data.png)
+
+    def select_new_dialog_work_icon(
+        self, icon_index: int, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int,
+    ) -> dict[str, Any]:
+        if type(icon_index) is not int or icon_index not in range(1, 7) or not dialog_hwnd or not main_hwnd:
+            raise BridgeError("E_POLICY_DENIED", "Exact main/dialog HWNDs and icon index 1..6 are required", stage="validation")
+        lease = self._locked()
+        try:
+            self._wait_for_quiet()
+            main = self._target(main_hwnd, for_input=True)
+            dialog = win.verified_new_dialog(self.settings.csp_executable, main, dialog_hwnd, allow_expanded=True)
+            self._purge_expired()
+            with self._cache_lock:
+                approval = self._confirmations.get(confirm_token)
+                capture = self._new_dialog_captures.get(capture_id)
+                if approval is None or capture is None or approval.used or capture.used:
+                    raise BridgeError("E_CONFIRM_EXPIRED", "New-dialog token or capture expired", retryable=True)
+                approval.used = True
+                capture.used = True
+            tick = win.get_last_input()[0]
+            if (
+                approval.operation != "new_dialog_icon" or approval.identifier != str(icon_index)
+                or approval.main_hwnd != main.hwnd or approval.dialog_hwnd != dialog.hwnd
+                or approval.main_fingerprint != main.fingerprint or approval.dialog_fingerprint != dialog.fingerprint
+                or approval.control_generation != self._control_generation.current()
+                or capture.control_generation != approval.control_generation
+                or capture.created_monotonic < approval.created_monotonic
+                or capture.main_hwnd != main.hwnd or capture.main_fingerprint != main.fingerprint
+                or capture.dialog_hwnd != dialog.hwnd or capture.dialog_fingerprint != dialog.fingerprint
+                or approval.last_input_tick != tick or capture.last_input_tick != tick
+                or win.pressed_input_keys() or self._visible_standard_dialogs(main)
+            ):
+                raise BridgeError("E_CONFIRM_REQUIRED", "New-dialog approval, capture, or input state changed", retryable=True)
+            before = win.capture_new_dialog(dialog)
+            if before.sha256 != capture.data.sha256 or win.get_last_input()[0] != tick:
+                raise BridgeError("E_STALE_CAPTURE", "New dialog pixels changed after capture", retryable=True)
+            self._check_cancelled()
+            try:
+                point = win.select_new_dialog_work_icon(dialog, icon_index, tick)
+            finally:
+                # SendInput can fail after one event. Invalidate authority even
+                # when the visual result is uncertain.
+                self._record_control_state_change()
+            return ok_result(
+                {"iconIndex": icon_index, "screenPoint": list(point)}, state_change="confirmed",
+                verification={"method": ["exactDialogProfile", "pixelMatch", "SendInput"], "confidence": 0.75},
+                warnings=["The icon was clicked; inspect a fresh New-dialog capture to verify the selected work type."],
+            )
+        finally:
+            lease.release()
 
     @staticmethod
     def _parse_preflight_parameters(parameters_json: str) -> dict[str, Any]:

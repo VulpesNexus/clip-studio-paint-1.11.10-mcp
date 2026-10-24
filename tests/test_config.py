@@ -177,6 +177,81 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 load_settings()
 
+    def test_only_exact_workspace_cst_copy_root_is_optional(self) -> None:
+        baseline = config_module._read_json(config_module.CONFIG_DIR / "config.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            project = parent / "MCP"
+            project.mkdir()
+            copy_root = parent / ".workspace" / "csps-cst-working-2026-10-14"
+            copy_root.mkdir(parents=True)
+            entry = {"id": "cst_copy", "path": str(copy_root), "read": True, "write": True}
+            valid = copy.deepcopy(baseline)
+            valid["path_roots"].append(entry)
+            with (
+                patch.object(config_module, "PROJECT_ROOT", project),
+                patch("csp_mcp.config._read_json", return_value=valid),
+            ):
+                self.assertEqual(load_settings().root("cst_copy").path, copy_root)
+
+            other = parent / "other"
+            other.mkdir()
+            invalid_entries = (
+                {**entry, "path": str(other)},
+                {**entry, "read": False},
+                {**entry, "write": False},
+                {**entry, "id": "arbitrary"},
+            )
+            for invalid in invalid_entries:
+                candidate = copy.deepcopy(baseline)
+                candidate["path_roots"].append(invalid)
+                with (
+                    self.subTest(invalid=invalid),
+                    patch.object(config_module, "PROJECT_ROOT", project),
+                    patch("csp_mcp.config._read_json", return_value=candidate),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        load_settings()
+
+    def test_ascii_cst_root_requires_exact_temp_copy_and_workspace_copy(self) -> None:
+        baseline = config_module._read_json(config_module.CONFIG_DIR / "config.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            project = parent / "MCP"
+            project.mkdir()
+            workspace_copy = parent / ".workspace" / "csps-cst-working-2026-10-14"
+            workspace_copy.mkdir(parents=True)
+            ascii_copy = parent / "csps-cst-ascii-20261014"
+            ascii_copy.mkdir()
+            candidate = copy.deepcopy(baseline)
+            candidate["path_roots"].extend([
+                {"id": "cst_copy", "path": str(workspace_copy), "read": True, "write": True},
+                {"id": "cst_ascii_copy", "path": str(ascii_copy), "read": True, "write": True},
+            ])
+            with (
+                patch.object(config_module, "PROJECT_ROOT", project),
+                patch.object(config_module.tempfile, "gettempdir", return_value=str(parent)),
+                patch("csp_mcp.config._read_json", return_value=candidate),
+            ):
+                self.assertEqual(load_settings().root("cst_ascii_copy").path, ascii_copy)
+            other = parent / "other"
+            other.mkdir()
+            for bad in (
+                {**candidate["path_roots"][-1], "path": str(other)},
+                {**candidate["path_roots"][-1], "read": False},
+                {**candidate["path_roots"][-1], "write": False},
+            ):
+                invalid = copy.deepcopy(candidate)
+                invalid["path_roots"][-1] = bad
+                with (
+                    self.subTest(bad=bad),
+                    patch.object(config_module, "PROJECT_ROOT", project),
+                    patch.object(config_module.tempfile, "gettempdir", return_value=str(parent)),
+                    patch("csp_mcp.config._read_json", return_value=invalid),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        load_settings()
+
     def test_registered_commands_are_valid_and_no_raw_code_exists(self) -> None:
         commands = load_commands()
         self.assertEqual(len(commands), 9)

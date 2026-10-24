@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import time
 import unittest
 import uuid
+from types import SimpleNamespace
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +17,176 @@ from csp_mcp.win32_backend import CaptureData, WindowRecord
 
 
 class ControllerStateTests(unittest.TestCase):
+    def test_cst_story_destination_rejects_existing_folder_and_other_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            copy_root = Path(temporary)
+            demo = copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst"
+            demo.parent.mkdir()
+            demo.write_bytes(b"copy")
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(demo), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_copy", path=copy_root))),
+            ):
+                _, fingerprint, folder, management_file = self.controller._verified_cst_story_destination(str(demo))
+                self.assertEqual(fingerprint, "fingerprint")
+                self.assertEqual(Path(folder), copy_root / "cs4-SampleData_1Copy")
+                self.assertEqual(Path(management_file), Path(folder) / "cs4-SampleData_1Copy.cmc")
+                Path(folder).mkdir()
+                with self.assertRaises(BridgeError):
+                    self.controller._verified_cst_story_destination(str(demo))
+            sample5 = copy_root / "cs4-Sample_5_comic" / "CS4.0Sample_5_comic.cst"
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(sample5), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_copy", path=copy_root))),
+            ):
+                _, _, sample5_folder, sample5_file = self.controller._verified_cst_story_destination(str(sample5))
+                self.assertEqual(Path(sample5_folder), copy_root / "cs4-Sample_5_comicCopy")
+                self.assertEqual(Path(sample5_file), Path(sample5_folder) / "cs4-Sample_5_comicCopy.cmc")
+            other = copy_root / "cs4-Sample_7" / "CS4.0Sample_7.cst"
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(other), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_copy", path=copy_root))),
+            ):
+                with self.assertRaises(BridgeError):
+                    self.controller._verified_cst_story_destination(str(other))
+            ascii_root = copy_root / "ascii"
+            ascii_root.mkdir()
+            ascii_sample5 = ascii_root / "cs4-Sample_5_comic" / "CS4.0Sample_5_comic.cst"
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(ascii_sample5), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_ascii_copy", path=ascii_root))),
+            ):
+                _, _, ascii_folder, ascii_file = self.controller._verified_cst_story_destination(str(ascii_sample5))
+                self.assertEqual(Path(ascii_folder), ascii_root / "cs4-Sample_5_comicCopy")
+                self.assertEqual(Path(ascii_file), Path(ascii_folder) / "cs4-Sample_5_comicCopy.cmc")
+            ascii_demo = ascii_root / "cs4-SampleData_1" / "CS4DemoSample.cst"
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(ascii_demo), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_ascii_copy", path=ascii_root))),
+            ):
+                _, _, demo_folder, demo_file = self.controller._verified_cst_story_destination(str(ascii_demo))
+                self.assertEqual(Path(demo_folder), ascii_root / "cs4-SampleData_1Copy")
+                self.assertEqual(Path(demo_file), Path(demo_folder) / "cs4-SampleData_1Copy.cmc")
+            ascii_sample7 = ascii_root / "cs4-Sample_7" / "CS4.0Sample_7.cst"
+            with (
+                patch.object(self.controller, "_verified_cst_copy", return_value=(str(ascii_sample7), "fingerprint")),
+                patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id="cst_ascii_copy", path=ascii_root))),
+            ):
+                _, _, sample7_folder, sample7_file = self.controller._verified_cst_story_destination(str(ascii_sample7))
+                self.assertEqual(Path(sample7_folder), ascii_root / "cs4-Sample_7Copy")
+                self.assertEqual(Path(sample7_file), Path(sample7_folder) / "cs4-Sample_7Copy.cmc")
+                Path(sample7_folder).mkdir()
+                with self.assertRaises(BridgeError):
+                    self.controller._verified_cst_story_destination(str(ascii_sample7))
+            for bad_path, bad_root in (
+                (ascii_root / "other" / "unprofiled.cst", "cst_ascii_copy"),
+                (ascii_sample5, "working"),
+            ):
+                with (
+                    patch.object(self.controller, "_verified_cst_copy", return_value=(str(bad_path), "fingerprint")),
+                    patch.object(self.controller.path_policy, "validate", return_value=SimpleNamespace(root=SimpleNamespace(id=bad_root, path=ascii_root))),
+                ):
+                    with self.assertRaises(BridgeError):
+                        self.controller._verified_cst_story_destination(str(bad_path))
+
+    def test_cst_conversion_requires_manifest_verified_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            copy_root = Path(temporary)
+            target = copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst"
+            target.parent.mkdir()
+            target.write_bytes(b"isolated cst copy")
+            sha = hashlib.sha256(target.read_bytes()).hexdigest()
+            manifest = {
+                "copy": str(copy_root), "source": "external original",
+                "files": [{"path": r"cs4-SampleData_1\CS4DemoSample.cst",
+                           "bytes": target.stat().st_size, "sha256": sha}],
+            }
+            manifest_path = copy_root / "copy-manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            validated = SimpleNamespace(path=target, root=SimpleNamespace(id="cst_copy", path=copy_root))
+            with patch.object(self.controller.path_policy, "validate", return_value=validated):
+                path, fingerprint = self.controller._verified_cst_copy(str(target))
+                self.assertEqual(path, str(target))
+                self.assertIn(sha.upper(), fingerprint)
+                manifest["files"][0]["sha256"] = "0" * 64
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaises(BridgeError):
+                    self.controller._verified_cst_copy(str(target))
+            original = SimpleNamespace(path=target, root=SimpleNamespace(id="working", path=copy_root))
+            with patch.object(self.controller.path_policy, "validate", return_value=original):
+                with self.assertRaises(BridgeError):
+                    self.controller._verified_cst_copy(str(target))
+
+    def test_ascii_cst_copy_requires_complete_matching_project(self) -> None:
+        profiles = (
+            ("cs4-SampleData_1", "CS4DemoSample.cst", 492),
+            ("cs4-Sample_5_comic", "CS4.0Sample_5_comic.cst", 201),
+            ("cs4-Sample_7", "CS4.0Sample_7.cst", 296),
+        )
+        for project_name, cst_name, count in profiles:
+            with self.subTest(project=project_name), tempfile.TemporaryDirectory() as temporary:
+                parent = Path(temporary)
+                ascii_root = parent / "ascii"
+                workspace_root = parent / "workspace"
+                project = ascii_root / project_name
+                project.mkdir(parents=True)
+                workspace_root.mkdir()
+                target = project / cst_name
+                records = []
+                for index in range(count):
+                    item = target if index == 0 else project / f"file{index:03d}.bin"
+                    payload = f"copy-{index}".encode("ascii")
+                    item.write_bytes(payload)
+                    records.append({"path": str(item.relative_to(ascii_root)).replace("/", "\\"),
+                                    "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+                (workspace_root / "copy-manifest.json").write_text(
+                    json.dumps({"copy": str(workspace_root), "files": records}), encoding="utf-8",
+                )
+                sibling = ascii_root / "cs4-Sample_5_comicCopy"
+                sibling.mkdir()
+                (sibling / "retained.clip").write_bytes(b"converted output")
+                validated = SimpleNamespace(path=target, root=SimpleNamespace(id="cst_ascii_copy", path=ascii_root))
+                roots = {"cst_ascii_copy": ascii_root, "cst_copy": workspace_root}
+                with (
+                    patch.object(self.controller.path_policy, "validate", return_value=validated),
+                    patch("csp_mcp.controller.Settings.root", side_effect=lambda root_id: SimpleNamespace(path=roots[root_id])),
+                ):
+                    path, fingerprint = self.controller._verified_cst_copy(str(target))
+                    self.assertEqual(path, str(target))
+                    self.assertIn(hashlib.sha256(target.read_bytes()).hexdigest().upper(), fingerprint)
+                    extra = project / "unexpected.bin"
+                    extra.write_bytes(b"extra")
+                    with self.assertRaises(BridgeError):
+                        self.controller._verified_ascii_cst_copy(extra)
+                    with self.assertRaises(BridgeError):
+                        self.controller._verified_cst_copy(str(target))
+                    extra.unlink()
+                    (project / "file001.bin").write_bytes(b"changed")
+                    with self.assertRaises(BridgeError):
+                        self.controller._verified_cst_copy(str(target))
+
+    def test_inspect_ui_scopes_file_dialog_children_to_owned_windows(self) -> None:
+        main = self._main_window()
+        owned = replace(main, hwnd=3, class_name="#32770", owner=main.hwnd)
+        unrelated = replace(main, hwnd=4, class_name="#32770", owner=0)
+        custom = replace(main, hwnd=5, class_name="CustomModal", owner=main.hwnd)
+        inspected: list[int] = []
+
+        def inspect(hwnd: int, *, max_items: int) -> list[dict[str, int]]:
+            inspected.append(hwnd)
+            return [{"hwnd": hwnd}]
+
+        with (
+            patch.object(self.controller, "_target", return_value=main),
+            patch("csp_mcp.controller.win.list_process_dialogs", return_value=[owned, unrelated, custom]),
+            patch("csp_mcp.controller.win.window_belongs_to_main", side_effect=lambda hwnd, _: hwnd == owned.hwnd),
+            patch("csp_mcp.controller.win.inspect_child_windows", side_effect=inspect),
+        ):
+            result = self.controller.inspect_ui(main.hwnd, max_items=10)["result"]
+
+        self.assertEqual(result["fileDialogChildren"], [{"dialogHwnd": owned.hwnd, "children": [{"hwnd": owned.hwnd}]}])
+        self.assertEqual(inspected, [main.hwnd, owned.hwnd])
+
     def setUp(self) -> None:
         self.controller = CspController()
         self.working = self.controller.settings.root("working").path
@@ -149,6 +322,134 @@ class ControllerStateTests(unittest.TestCase):
                 self._consume_output_confirmation(token, target, main, dialog)
         finally:
             target.unlink(missing_ok=True)
+
+    def test_new_dialog_icon_rejects_changed_pixels_before_input(self) -> None:
+        main = self._main_window()
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 3, "title": "New", "owner": 4,
+            "rect": (100, 20, 600, 595), "client_rect": (100, 20, 600, 595),
+        })
+        first = CaptureData(
+            png=b"first", width=500, height=575, source_width=500, source_height=575,
+            rect=dialog.rect, sha256="first", luminance_stddev=1.0,
+        )
+        changed = CaptureData(
+            png=b"changed", width=500, height=575, source_width=500, source_height=575,
+            rect=dialog.rect, sha256="changed", luminance_stddev=1.0,
+        )
+        with (
+            patch.object(self.controller, "_wait_for_quiet", return_value={}),
+            patch.object(self.controller, "_target", return_value=main),
+            patch.object(self.controller, "_visible_standard_dialogs", return_value=[]),
+            patch("csp_mcp.controller.win.verified_new_dialog", return_value=dialog),
+            patch("csp_mcp.controller.win.assert_new_dialog_visible"),
+            patch("csp_mcp.controller.win.get_last_input", return_value=(123, 9999)),
+            patch("csp_mcp.controller.win.pressed_input_keys", return_value=[]),
+            patch("csp_mcp.controller.win.capture_new_dialog", side_effect=[first, changed]),
+            patch("csp_mcp.controller.win.select_new_dialog_work_icon") as click,
+        ):
+            preflight = self.controller.new_dialog_preflight(3, dialog.hwnd, main.hwnd)
+            captured, _png = self.controller.capture_new_dialog(dialog.hwnd, main.hwnd)
+            with self.assertRaises(BridgeError) as raised:
+                self.controller.select_new_dialog_work_icon(
+                    3, captured["captureId"], preflight["result"]["confirmToken"],
+                    dialog.hwnd, main.hwnd,
+                )
+            self.assertEqual(raised.exception.code, "E_STALE_CAPTURE")
+            click.assert_not_called()
+
+    def test_expanded_new_cancel_refuses_foreign_foreground_without_focusing(self) -> None:
+        main = self._main_window()
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 3, "title": "New", "owner": 4,
+            "rect": (100, 20, 1009, 853), "client_rect": (100, 20, 1009, 853),
+        })
+        with (
+            patch.object(self.controller, "_wait_for_quiet", return_value={}),
+            patch.object(self.controller, "_target", return_value=main),
+            patch("csp_mcp.controller.win.verified_new_dialog", return_value=dialog),
+            patch("csp_mcp.controller.win.foreground_window", return_value=999),
+            patch("csp_mcp.controller.win.pressed_input_keys", return_value=[]),
+            patch("csp_mcp.controller.win.focus_window") as focus,
+            patch("csp_mcp.controller.win.send_expanded_new_dialog_escape") as escape,
+        ):
+            with self.assertRaises(BridgeError) as raised:
+                self.controller.cancel_expanded_new_dialog(dialog.hwnd, main.hwnd)
+            self.assertEqual(raised.exception.code, "E_USER_INTERRUPTED")
+            focus.assert_not_called()
+            escape.assert_not_called()
+
+    def test_blank_comic_confirmation_rejects_changed_capture(self) -> None:
+        main = self._main_window()
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 3, "title": "New", "owner": 4,
+            "rect": (100, 20, 1009, 853), "client_rect": (100, 20, 1009, 853),
+        })
+        first = CaptureData(
+            png=b"comic", width=909, height=833, source_width=909, source_height=833,
+            rect=dialog.rect, sha256="comic", luminance_stddev=1.0,
+        )
+        changed = CaptureData(
+            png=b"changed", width=909, height=833, source_width=909, source_height=833,
+            rect=dialog.rect, sha256="changed", luminance_stddev=1.0,
+        )
+        with (
+            patch.object(self.controller, "_wait_for_quiet", return_value={}),
+            patch.object(self.controller, "_target", return_value=main),
+            patch.object(self.controller, "_visible_standard_dialogs", return_value=[]),
+            patch("csp_mcp.controller.win.verified_new_dialog", return_value=dialog),
+            patch("csp_mcp.controller.win.assert_new_dialog_visible"),
+            patch("csp_mcp.controller.win.foreground_window", return_value=dialog.hwnd),
+            patch("csp_mcp.controller.win.get_last_input", return_value=(123, 9999)),
+            patch("csp_mcp.controller.win.pressed_input_keys", return_value=[]),
+            patch("csp_mcp.controller.win.capture_new_dialog", side_effect=[first, changed]),
+            patch("csp_mcp.controller.win.confirm_expanded_new_dialog") as click,
+        ):
+            preflight = self.controller.new_comic_confirm_preflight(dialog.hwnd, main.hwnd)
+            captured, _png = self.controller.capture_new_dialog(dialog.hwnd, main.hwnd)
+            with self.assertRaises(BridgeError) as raised:
+                self.controller.confirm_blank_comic(
+                    captured["captureId"], preflight["result"]["confirmToken"],
+                    dialog.hwnd, main.hwnd,
+                )
+            self.assertEqual(raised.exception.code, "E_STALE_CAPTURE")
+            click.assert_not_called()
+
+    def test_page_copy_choice_rejects_changed_capture_before_click(self) -> None:
+        main = self._main_window()
+        warning = WindowRecord(**{
+            **main.__dict__, "hwnd": 3, "title": "CLIP STUDIO PAINT EX", "owner": 4,
+            "rect": (100, 20, 538, 129), "client_rect": (100, 20, 538, 129),
+        })
+        first = CaptureData(
+            png=b"warning", width=438, height=109, source_width=438, source_height=109,
+            rect=warning.rect, sha256="warning", luminance_stddev=1.0,
+        )
+        changed = CaptureData(
+            png=b"changed", width=438, height=109, source_width=438, source_height=109,
+            rect=warning.rect, sha256="changed", luminance_stddev=1.0,
+        )
+        with (
+            patch.object(self.controller, "_wait_for_quiet", return_value={}),
+            patch.object(self.controller, "_target", return_value=main),
+            patch.object(self.controller, "_visible_standard_dialogs", return_value=[]),
+            patch("csp_mcp.controller.win.verified_page_copy_warning", return_value=warning),
+            patch("csp_mcp.controller.win.assert_new_dialog_visible"),
+            patch("csp_mcp.controller.win.foreground_window", return_value=warning.hwnd),
+            patch("csp_mcp.controller.win.get_last_input", return_value=(123, 9999)),
+            patch("csp_mcp.controller.win.pressed_input_keys", return_value=[]),
+            patch("csp_mcp.controller.win.capture_page_copy_warning", side_effect=[first, changed]),
+            patch("csp_mcp.controller.win.choose_page_copy_warning") as click,
+        ):
+            preflight = self.controller.page_copy_warning_preflight("cancel", warning.hwnd, main.hwnd)
+            captured, _png = self.controller.capture_page_copy_warning(warning.hwnd, main.hwnd)
+            with self.assertRaises(BridgeError) as raised:
+                self.controller.choose_page_copy_warning(
+                    "cancel", captured["captureId"], preflight["result"]["confirmToken"],
+                    warning.hwnd, main.hwnd,
+                )
+            self.assertEqual(raised.exception.code, "E_STALE_CAPTURE")
+            click.assert_not_called()
 
     def test_output_replace_confirmation_detects_file_change(self) -> None:
         target = self._temporary_output()

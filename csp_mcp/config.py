@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -286,15 +287,48 @@ def load_settings() -> Settings:
         for index, item in enumerate(roots_raw)
     )
     root_ids = [item.id for item in roots]
-    if set(root_ids) != {"input", "working", "exports"} or len(root_ids) != 3:
-        raise RuntimeError("path_roots must define input, working, and exports exactly once")
+    required_root_ids = {"input", "working", "exports"}
+    allowed_root_sets = (
+        required_root_ids,
+        required_root_ids | {"cst_copy"},
+        required_root_ids | {"cst_copy", "cst_ascii_copy"},
+    )
+    if len(root_ids) != len(set(root_ids)) or set(root_ids) not in allowed_root_sets:
+        raise RuntimeError("path_roots require the three standard roots; only exact cst_copy and cst_ascii_copy may be added")
     if any(not item.path.is_absolute() or not item.read for item in roots):
         raise RuntimeError("Every path root must be absolute and readable")
     if next(item for item in roots if item.id == "input").write:
         raise RuntimeError("The input root must remain read-only")
     if any(not next(item for item in roots if item.id == root_id).write for root_id in ("working", "exports")):
         raise RuntimeError("The working and exports roots must remain writable")
-    normalized_roots = [os.path.normcase(os.path.abspath(str(item.path))) for item in roots]
+    if "cst_copy" in root_ids:
+        copy_root = next(item for item in roots if item.id == "cst_copy")
+        try:
+            workspace_root = (PROJECT_ROOT.parent / ".workspace").resolve(strict=True)
+            expected_copy_root = (workspace_root / "csps-cst-working-2026-10-14").resolve(strict=True)
+            configured_copy_root = copy_root.path.resolve(strict=True)
+            project_parent = PROJECT_ROOT.parent.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("The cst_copy root must exist inside the project workspace") from exc
+        if (not copy_root.read or not copy_root.write
+                or not workspace_root.is_relative_to(project_parent)
+                or not expected_copy_root.is_relative_to(workspace_root)
+                or configured_copy_root != expected_copy_root):
+            raise RuntimeError("cst_copy must be the exact writable project workspace copy directory")
+    if "cst_ascii_copy" in root_ids:
+        ascii_root = next(item for item in roots if item.id == "cst_ascii_copy")
+        try:
+            temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
+            expected_ascii_root = (temp_root / "csps-cst-ascii-20261014").resolve(strict=True)
+            configured_ascii_root = ascii_root.path.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("The cst_ascii_copy root must exist inside the local temp directory") from exc
+        if (not ascii_root.read or not ascii_root.write or ascii_root.path.is_symlink()
+                or not expected_ascii_root.is_relative_to(temp_root)
+                or configured_ascii_root != expected_ascii_root
+                or not str(expected_ascii_root).isascii()):
+            raise RuntimeError("cst_ascii_copy must be the exact ASCII local temp copy directory")
+    normalized_roots = [os.path.normcase(str(item.path.resolve(strict=False))) for item in roots]
     for index, left in enumerate(normalized_roots):
         for right in normalized_roots[index + 1:]:
             try:

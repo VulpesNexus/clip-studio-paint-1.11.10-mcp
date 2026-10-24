@@ -17,6 +17,18 @@ Tokens expire after 45 seconds, are single-use, bind the complete parameters and
 
 ## Registered commands
 
+### CSP 1.11.10 New dialog work icons
+
+The dedicated New-dialog route recognizes the observed 500×575 and 909×833 pixel English `New` layouts at 96 DPI for work-icon input. After `document.new_dialog`, obtain the exact main and dialog HWNDs with `csp_get_state`. For one work-type icon, call `csp_new_dialog_preflight(icon_index=1..6, dialog_hwnd=..., main_hwnd=...)`, then `csp_capture_new_dialog` and inspect the image, then `csp_select_new_dialog_work_icon` with that capture and token. Repeat for another icon. A moved, replaced, obscured, or changed dialog invalidates the action. Standard `#32770` dialogs still require `csp_native_file_dialog`.
+
+Selecting a work icon can expand New to the observed 909×833 layout. CSP can also reopen directly in that layout with Illustration selected. The same six top-row icon points are profiled in both layouts; a fresh preflight and capture are required for each click. If an overlap blocks ordinary capture or cancel, `csp_expanded_new_dialog_overlaps` reports only intersecting top-level windows above that exact dialog and grants no input authority. `csp_cancel_expanded_new_dialog` focuses that exact dialog while CSP is foreground, sends one Escape, and checks whether it disappeared. Neither tool accepts a path or edits the form.
+
+To create a blank Comic document after selecting icon 3, call `csp_new_comic_confirm_preflight` with the exact expanded dialog and main HWNDs, take a new `csp_capture_new_dialog`, and inspect that Comic is selected with the intended one-page settings and no unexpected options. Then pass only that capture and token to `csp_confirm_blank_comic`. The tool clicks the fixed expanded-dialog OK point once and reports whether the dialog disappeared; inspect the resulting document before treating it as created. It does not save or export.
+
+For a page-managed `.lip` Save As, CSP may show the exact observed 438×109 `CLIP STUDIO PAINT EX` warning that a copy of the canvas will be saved. After registered Save As, obtain its HWND with `csp_get_state`; call `csp_page_copy_warning_preflight` with `choice="proceed_copy"` and a validated new output path, or `choice="cancel"` with no path. Capture it with `csp_capture_page_copy_warning`, inspect the warning and unchecked “Do not show again” box, then use `csp_choose_page_copy_warning` with the same choice, path, capture, and token. This clicks only the fixed OK or Cancel button. Proceed does not enter or submit the output path. Inspect the next dialog; use `csp_native_file_dialog` only if it is a verified standard `#32770` file dialog in the selected main-window ownership chain. If ownership differs, stop and profile that exact follow-up separately. Verify any resulting `.clip` with `csp_wait_for_file` and readback before grading L2 migration.
+
+This route was added after the October 14 custom-window finding. Its source and negative tests do not certify live operation until a new MCP process loads the tools and the host behavior is checked.
+
 The tracked registry, *config/commands.json*, holds nine commands bound to CSP's default shortcuts:
 
 | Command | Shortcut | Effect |

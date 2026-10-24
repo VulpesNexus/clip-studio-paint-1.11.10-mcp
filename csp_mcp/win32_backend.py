@@ -514,6 +514,597 @@ def window_belongs_to_main(hwnd: int, main_hwnd: int) -> bool:
     return bool(hwnd and main_hwnd and root_owner_window(hwnd) == int(main_hwnd))
 
 
+# CSP 1.11.10 gives its New window a hidden owner unrelated to the visible
+# main HWND. Keep the ordinary ownership rule above unchanged. This profile is
+# only used by the dedicated New-dialog tools, never by generic input or file IO.
+NEW_DIALOG_CLASS_SUFFIX = "-6571DDC4-B3AA-45e4-9D35-57C0C1E90AD5"
+NEW_DIALOG_OWNER_CLASS_SUFFIX = "-2D2FC079-EABA-46f4-9B20-A910FB25B322"
+NEW_DIALOG_SIZE = (500, 575)
+NEW_DIALOG_EXPANDED_SIZE = (909, 833)
+NEW_DIALOG_WORK_ICONS = (119, 162, 205, 248, 291, 334)
+NEW_DIALOG_EXPANDED_OK_POINT = (853, 46)
+PAGE_COPY_WARNING_SIZE = (438, 109)
+PAGE_COPY_WARNING_POINTS = {"proceed_copy": (294, 85), "cancel": (384, 85)}
+CST_CONVERSION_WARNING_SIZE = (300, 116)
+CST_CONVERSION_OK_POINT = (156, 93)
+CST_STORY_FOLDER_SIZE = (720, 199)
+CST_STORY_FOLDER_OK_POINT = (665, 46)
+CST_CONVERSION_ERROR_SIZE = (231, 109)
+
+
+def new_dialog_owner_diagnostic(expected_executable: Path, main: WindowRecord, dialog_hwnd: int) -> dict[str, Any]:
+    """Read only the owner of the exact foreground CSP 1.11.10 New window."""
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "New owner diagnostic requires one unchanged CSP main window")
+    dialogs = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.hwnd == dialog_hwnd and item.pid == main.pid and item.title == "New"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1]) == NEW_DIALOG_SIZE
+    ]
+    if len(dialogs) != 1 or foreground_window() != dialog_hwnd:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exact foreground profiled New dialog was not found", retryable=True)
+    dialog = dialogs[0]
+    owner = _record_window(dialog.owner)
+    return {
+        "mainWindowId": str(main.hwnd), "dialogWindowId": str(dialog.hwnd),
+        "dialogFingerprint": dialog.fingerprint, "dialogOwnerId": str(dialog.owner),
+        "ownerProcessId": _pid_for_window(dialog.owner),
+        "ownerVisible": bool(win32gui.IsWindowVisible(dialog.owner)),
+        "ownerClassName": owner.class_name if owner else None,
+        "ownerTitle": owner.title if owner else None,
+        "ownerRect": list(owner.rect) if owner else None,
+        "ownerOwnerId": str(owner.owner) if owner else None,
+        "ownerExecutableMatches": bool(owner and os.path.normcase(os.path.abspath(owner.executable))
+                                       == os.path.normcase(os.path.abspath(str(expected_executable)))),
+    }
+
+
+def verified_page_copy_warning(
+    expected_executable: Path, main: WindowRecord, warning_hwnd: int,
+    *, require_foreground: bool = True,
+) -> WindowRecord:
+    """Bind only the observed CSP page-managed Save As copy warning."""
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Page-copy warning requires one unchanged CSP main window")
+    warnings = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.hwnd == warning_hwnd and item.pid == main.pid and item.title == "CLIP STUDIO PAINT EX"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1]) == PAGE_COPY_WARNING_SIZE
+    ]
+    if len(warnings) != 1:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exact profiled page-copy warning was not found", retryable=True)
+    warning = warnings[0]
+    owner = _record_window(warning.owner)
+    owner_matches = bool(
+        owner and owner.pid == main.pid and owner.visible and not owner.minimized
+        and owner.title == "" and owner.class_name == main.class_name + NEW_DIALOG_OWNER_CLASS_SUFFIX
+        and owner.rect == (0, 0, 1, 1) and owner.owner != 0
+        and os.path.normcase(os.path.abspath(owner.executable))
+        == os.path.normcase(os.path.abspath(str(expected_executable)))
+    )
+    if not owner_matches:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Page-copy warning owner does not match CSP bookkeeping window")
+    if not (main.rect[0] <= warning.rect[0] < warning.rect[2] <= main.rect[2]
+            and main.rect[1] <= warning.rect[1] < warning.rect[3] <= main.rect[3]):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Page-copy warning is outside the selected CSP main window")
+    if require_foreground and foreground_window() != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Page-copy warning is not foreground", retryable=True)
+    return warning
+
+
+def verified_cst_conversion_warning(
+    expected_executable: Path, main: WindowRecord, warning_hwnd: int,
+    *, require_foreground: bool = True,
+) -> WindowRecord:
+    """Bind only the measured CSP warning for converting a copied CST work."""
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "CST conversion requires one unchanged CSP main window")
+    warnings = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.hwnd == warning_hwnd and item.pid == main.pid and item.title == "CLIP STUDIO PAINT EX"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner == 7147922
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1]) == CST_CONVERSION_WARNING_SIZE
+    ]
+    if len(warnings) != 1:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exact CST conversion warning was not found", retryable=True)
+    warning = warnings[0]
+    owner = _record_window(warning.owner)
+    if not (owner and owner.pid == main.pid and owner.visible and not owner.minimized
+            and owner.title == "" and owner.class_name == main.class_name + NEW_DIALOG_OWNER_CLASS_SUFFIX
+            and owner.rect == (0, 0, 1, 1) and owner.owner != 0
+            and os.path.normcase(os.path.abspath(owner.executable))
+            == os.path.normcase(os.path.abspath(str(expected_executable)))):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "CST warning owner does not match CSP bookkeeping window")
+    if not (main.rect[0] <= warning.rect[0] < warning.rect[2] <= main.rect[2]
+            and main.rect[1] <= warning.rect[1] < warning.rect[3] <= main.rect[3]):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "CST warning is outside the selected CSP main window")
+    if require_foreground and foreground_window() != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "CST warning is not foreground", retryable=True)
+    return warning
+
+
+def capture_cst_conversion_warning(warning: WindowRecord) -> CaptureData:
+    if (warning.rect[2] - warning.rect[0], warning.rect[3] - warning.rect[1]) != CST_CONVERSION_WARNING_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "CST warning layout changed", stage="validation")
+    assert_new_dialog_visible(warning)
+    image = ImageGrab.grab(bbox=warning.rect, all_screens=True)
+    assert_new_dialog_visible(warning)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    png = output.getvalue()
+    return CaptureData(
+        png=png, width=image.width, height=image.height,
+        source_width=image.width, source_height=image.height,
+        rect=warning.rect, sha256=hashlib.sha256(png).hexdigest(),
+        luminance_stddev=round(float(ImageStat.Stat(image.convert("L")).stddev[0]), 3),
+        ignored_overlays=(),
+    )
+
+
+def accept_cst_conversion_warning(warning: WindowRecord, expected_last_input_tick: int) -> tuple[int, int]:
+    if (warning.rect[2] - warning.rect[0], warning.rect[3] - warning.rect[1]) != CST_CONVERSION_WARNING_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "CST warning layout changed", stage="validation")
+    x, y = warning.rect[0] + CST_CONVERSION_OK_POINT[0], warning.rect[1] + CST_CONVERSION_OK_POINT[1]
+    assert_new_dialog_visible(warning)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != warning.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "CST warning OK point is obscured", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    current = _record_window(warning.hwnd)
+    if current is None or current.fingerprint != warning.fingerprint or foreground_window() != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "CST warning changed at OK boundary", retryable=True)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
+def verified_cst_story_folder_dialog(
+    expected_executable: Path, main: WindowRecord, dialog_hwnd: int,
+    *, require_foreground: bool = True,
+) -> WindowRecord:
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Story-folder action requires one unchanged CSP main window")
+    dialogs = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.hwnd == dialog_hwnd and item.pid == main.pid and item.title == "Create story folder"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner == 7147922
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1]) == CST_STORY_FOLDER_SIZE
+    ]
+    if len(dialogs) != 1:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exact CST story-folder dialog was not found", retryable=True)
+    dialog = dialogs[0]
+    owner = _record_window(dialog.owner)
+    if not (owner and owner.pid == main.pid and owner.visible and not owner.minimized
+            and owner.title == "" and owner.class_name == main.class_name + NEW_DIALOG_OWNER_CLASS_SUFFIX
+            and owner.rect == (0, 0, 1, 1) and owner.owner != 0
+            and os.path.normcase(os.path.abspath(owner.executable))
+            == os.path.normcase(os.path.abspath(str(expected_executable)))):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Story-folder owner does not match CSP bookkeeping window")
+    if not (main.rect[0] <= dialog.rect[0] < dialog.rect[2] <= main.rect[2]
+            and main.rect[1] <= dialog.rect[1] < dialog.rect[3] <= main.rect[3]):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Story-folder dialog is outside the selected CSP main window")
+    if require_foreground and foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Story-folder dialog is not foreground", retryable=True)
+    return dialog
+
+
+def capture_cst_story_folder_dialog(dialog: WindowRecord) -> CaptureData:
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != CST_STORY_FOLDER_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Story-folder layout changed", stage="validation")
+    assert_new_dialog_visible(dialog)
+    image = ImageGrab.grab(bbox=dialog.rect, all_screens=True)
+    assert_new_dialog_visible(dialog)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    png = output.getvalue()
+    return CaptureData(
+        png=png, width=image.width, height=image.height,
+        source_width=image.width, source_height=image.height,
+        rect=dialog.rect, sha256=hashlib.sha256(png).hexdigest(),
+        luminance_stddev=round(float(ImageStat.Stat(image.convert("L")).stddev[0]), 3),
+        ignored_overlays=(),
+    )
+
+
+def confirm_cst_story_folder_dialog(dialog: WindowRecord, expected_last_input_tick: int) -> tuple[int, int]:
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != CST_STORY_FOLDER_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Story-folder layout changed", stage="validation")
+    x, y = dialog.rect[0] + CST_STORY_FOLDER_OK_POINT[0], dialog.rect[1] + CST_STORY_FOLDER_OK_POINT[1]
+    assert_new_dialog_visible(dialog)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != dialog.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Story-folder OK point is obscured", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    current = _record_window(dialog.hwnd)
+    if current is None or current.fingerprint != dialog.fingerprint or foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Story-folder dialog changed at OK boundary", retryable=True)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
+def verified_cst_conversion_error(
+    expected_executable: Path, main: WindowRecord, error_hwnd: int,
+    *, require_foreground: bool = True,
+) -> WindowRecord:
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "Conversion-error dismissal requires one unchanged CSP main window")
+    errors = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.hwnd == error_hwnd and item.pid == main.pid and item.title == "CLIP STUDIO PAINT EX"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner == 7147922
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1]) == CST_CONVERSION_ERROR_SIZE
+    ]
+    if len(errors) != 1:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exact CST conversion-error dialog was not found", retryable=True)
+    error = errors[0]
+    owner = _record_window(error.owner)
+    if not (owner and owner.pid == main.pid and owner.visible and not owner.minimized
+            and owner.title == "" and owner.class_name == main.class_name + NEW_DIALOG_OWNER_CLASS_SUFFIX
+            and owner.rect == (0, 0, 1, 1) and owner.owner != 0
+            and os.path.normcase(os.path.abspath(owner.executable))
+            == os.path.normcase(os.path.abspath(str(expected_executable)))):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "CST error owner does not match CSP bookkeeping window")
+    if not (main.rect[0] <= error.rect[0] < error.rect[2] <= main.rect[2]
+            and main.rect[1] <= error.rect[1] < error.rect[3] <= main.rect[3]):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "CST error is outside the selected CSP main window")
+    if require_foreground and foreground_window() != error.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "CST error is not foreground", retryable=True)
+    return error
+
+
+def send_cst_conversion_error_escape(error: WindowRecord, expected_last_input_tick: int) -> None:
+    if (error.rect[2] - error.rect[0], error.rect[3] - error.rect[1]) != CST_CONVERSION_ERROR_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "CST error layout changed", stage="validation")
+    current = _record_window(error.hwnd)
+    if current is None or current.fingerprint != error.fingerprint or foreground_window() != error.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "CST error identity or focus changed", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    latest = _record_window(error.hwnd)
+    if foreground_window() != error.hwnd or latest is None or latest.fingerprint != error.fingerprint:
+        raise BridgeError("E_USER_INTERRUPTED", "CST error changed at Escape boundary", retryable=True)
+    key = VK["ESCAPE"]
+    try:
+        _send([_key(key, False), _key(key, True)])
+    except BridgeError:
+        _best_effort_release([_key(key, True)])
+        raise
+
+
+def verified_new_dialog(
+    expected_executable: Path, main: WindowRecord, dialog_hwnd: int = 0,
+    *, allow_expanded: bool = False, require_foreground: bool = True,
+) -> WindowRecord:
+    mains = [
+        item for item in enum_csp_windows(expected_executable)
+        if item.owner == 0 and item.class_name == main.class_name and item.area > 100000
+    ]
+    if len(mains) != 1 or mains[0].hwnd != main.hwnd or mains[0].fingerprint != main.fingerprint:
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "New dialog requires one unchanged CSP main window")
+    dialogs = [
+        item for item in enum_csp_windows(expected_executable, include_dialogs=True)
+        if item.pid == main.pid and item.title == "New"
+        and item.class_name == main.class_name + NEW_DIALOG_CLASS_SUFFIX
+        and item.visible and not item.minimized and item.owner
+        and item.dpi == main.dpi == 96
+        and (item.rect[2] - item.rect[0], item.rect[3] - item.rect[1])
+        in ({NEW_DIALOG_SIZE, NEW_DIALOG_EXPANDED_SIZE} if allow_expanded else {NEW_DIALOG_SIZE})
+    ]
+    if len(dialogs) != 1 or (dialog_hwnd and dialogs[0].hwnd != dialog_hwnd):
+        raise BridgeError("E_WINDOW_NOT_FOUND", "Exactly one profiled CSP New dialog is required", retryable=True)
+    dialog = dialogs[0]
+    owner = _record_window(dialog.owner)
+    owner_profile_matches = bool(
+        owner and owner.pid == main.pid and owner.visible and not owner.minimized
+        and owner.title == "" and owner.class_name == main.class_name + NEW_DIALOG_OWNER_CLASS_SUFFIX
+        and owner.rect == (0, 0, 1, 1) and owner.owner != 0
+        and os.path.normcase(os.path.abspath(owner.executable))
+        == os.path.normcase(os.path.abspath(str(expected_executable)))
+    )
+    if not owner_profile_matches:
+        raise BridgeError(
+            "E_WINDOW_AMBIGUOUS", "New dialog owner does not match the observed CSP bookkeeping window",
+            details={"ownerWindowId": str(dialog.owner), "ownerPid": owner.pid if owner else _pid_for_window(dialog.owner),
+                     "expectedPid": main.pid, "ownerVisible": owner.visible if owner else None,
+                     "ownerClassName": owner.class_name if owner else None,
+                     "ownerRect": list(owner.rect) if owner else None},
+        )
+    if not (main.rect[0] <= dialog.rect[0] < dialog.rect[2] <= main.rect[2]
+            and main.rect[1] <= dialog.rect[1] < dialog.rect[3] <= main.rect[3]):
+        raise BridgeError("E_WINDOW_AMBIGUOUS", "New dialog is outside the selected CSP main window")
+    if require_foreground and foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "The exact New dialog is not foreground", retryable=True)
+    return dialog
+
+
+def inspect_expanded_new_dialog_overlaps(
+    expected_executable: Path, main: WindowRecord, dialog_hwnd: int,
+) -> dict[str, Any]:
+    """Read only top-level windows above the exact expanded New dialog."""
+    dialog = verified_new_dialog(
+        expected_executable, main, dialog_hwnd,
+        allow_expanded=True, require_foreground=False,
+    )
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != NEW_DIALOG_EXPANDED_SIZE:
+        raise BridgeError("E_WINDOW_NOT_FOUND", "The New dialog is not in the observed expanded layout")
+    foreground = foreground_window()
+    if foreground not in {main.hwnd, dialog.hwnd}:
+        raise BridgeError("E_USER_INTERRUPTED", "CSP is not foreground for overlap diagnosis", retryable=True)
+    left, top, right, bottom = dialog.rect
+    above = int(win32gui.GetWindow(dialog.hwnd, win32con.GW_HWNDPREV) or 0)
+    visited: set[int] = set()
+    overlaps: list[dict[str, Any]] = []
+    try:
+        while above and above not in visited and len(visited) < 1024:
+            visited.add(above)
+            if win32gui.IsWindowVisible(above) and not win32gui.IsIconic(above):
+                rect = visible_window_rect(above)
+                a, b, c, d = rect
+                if c - a > 1 and d - b > 1 and max(left, a) < min(right, c) and max(top, b) < min(bottom, d):
+                    record = _record_window(above)
+                    overlaps.append({
+                        "hwnd": above, "rect": list(rect),
+                        "pid": record.pid if record else _pid_for_window(above),
+                        "className": record.class_name if record else None,
+                        "title": record.title if record else None,
+                        "owner": record.owner if record else None,
+                        "executableMatchesPinned": bool(record and os.path.normcase(os.path.abspath(record.executable))
+                                                       == os.path.normcase(os.path.abspath(str(expected_executable)))),
+                    })
+                    if len(overlaps) >= 32:
+                        raise BridgeError("E_WINDOW_AMBIGUOUS", "Too many overlapping windows to diagnose safely")
+            above = int(win32gui.GetWindow(above, win32con.GW_HWNDPREV) or 0)
+    except BridgeError:
+        raise
+    except Exception as exc:
+        raise BridgeError("E_CAPABILITY_UNAVAILABLE", "Expanded New dialog overlap could not be inspected", retryable=True) from exc
+    return {"mainWindowId": str(main.hwnd), "dialogWindowId": str(dialog.hwnd),
+            "dialogFingerprint": dialog.fingerprint, "foregroundWindowId": str(foreground),
+            "overlaps": overlaps, "authorizesInput": False}
+
+
+def _assert_new_dialog_visible_impl(dialog: WindowRecord) -> None:
+    if foreground_window() != dialog.hwnd or _pid_for_window(dialog.hwnd) != dialog.pid:
+        raise BridgeError("E_USER_INTERRUPTED", "New dialog focus or process changed", retryable=True)
+    left, top, right, bottom = dialog.rect
+    above = int(win32gui.GetWindow(dialog.hwnd, win32con.GW_HWNDPREV) or 0)
+    seen: set[int] = set()
+    while above and above not in seen and len(seen) < 1024:
+        seen.add(above)
+        if win32gui.IsWindowVisible(above) and not win32gui.IsIconic(above):
+            a, b, c, d = visible_window_rect(above)
+            if c - a > 1 and d - b > 1 and max(left, a) < min(right, c) and max(top, b) < min(bottom, d):
+                # A CSP-owned SysShadow can frame this dialog but must not paint
+                # over its interior. Any other overlapping window is ambiguous.
+                shadow = (
+                    _pid_for_window(above) == dialog.pid
+                    and win32gui.GetClassName(above) == "SysShadow"
+                    and a >= left - 16 and b >= top - 16
+                    and c <= right + 16 and d <= bottom + 16
+                    and (a >= right - 16 or b >= bottom - 16)
+                )
+                if not shadow:
+                    raise BridgeError("E_CAPABILITY_UNAVAILABLE", "Another window overlaps the New dialog", retryable=True)
+        above = int(win32gui.GetWindow(above, win32con.GW_HWNDPREV) or 0)
+    for row in range(7):
+        y = top + 12 + round((bottom - top - 25) * row / 6)
+        for column in range(7):
+            x = left + 12 + round((right - left - 25) * column / 6)
+            point = window_at_point(x, y)
+            if _pid_for_window(point) != dialog.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != dialog.hwnd:
+                raise BridgeError("E_CAPABILITY_UNAVAILABLE", "New dialog capture has an unverified covering window", retryable=True)
+
+
+def assert_new_dialog_visible(dialog: WindowRecord) -> None:
+    try:
+        _assert_new_dialog_visible_impl(dialog)
+    except BridgeError:
+        raise
+    except Exception as exc:
+        raise BridgeError("E_CAPABILITY_UNAVAILABLE", "New dialog visibility could not be verified", retryable=True) from exc
+
+
+def capture_new_dialog(dialog: WindowRecord) -> CaptureData:
+    assert_new_dialog_visible(dialog)
+    image = ImageGrab.grab(bbox=dialog.rect, all_screens=True)
+    assert_new_dialog_visible(dialog)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    png = output.getvalue()
+    return CaptureData(
+        png=png, width=image.width, height=image.height,
+        source_width=image.width, source_height=image.height,
+        rect=dialog.rect, sha256=hashlib.sha256(png).hexdigest(),
+        luminance_stddev=round(float(ImageStat.Stat(image.convert("L")).stddev[0]), 3),
+        ignored_overlays=(),
+    )
+
+
+def capture_page_copy_warning(warning: WindowRecord) -> CaptureData:
+    if (warning.rect[2] - warning.rect[0], warning.rect[3] - warning.rect[1]) != PAGE_COPY_WARNING_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Page-copy warning layout changed", stage="validation")
+    assert_new_dialog_visible(warning)
+    image = ImageGrab.grab(bbox=warning.rect, all_screens=True)
+    assert_new_dialog_visible(warning)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    png = output.getvalue()
+    return CaptureData(
+        png=png, width=image.width, height=image.height,
+        source_width=image.width, source_height=image.height,
+        rect=warning.rect, sha256=hashlib.sha256(png).hexdigest(),
+        luminance_stddev=round(float(ImageStat.Stat(image.convert("L")).stddev[0]), 3),
+        ignored_overlays=(),
+    )
+
+
+def choose_page_copy_warning(warning: WindowRecord, choice: str, expected_last_input_tick: int) -> tuple[int, int]:
+    if choice not in PAGE_COPY_WARNING_POINTS:
+        raise BridgeError("E_POLICY_DENIED", "Page-copy warning choice must be proceed_copy or cancel", stage="validation")
+    if (warning.rect[2] - warning.rect[0], warning.rect[3] - warning.rect[1]) != PAGE_COPY_WARNING_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Page-copy warning layout changed", stage="validation")
+    relative_x, relative_y = PAGE_COPY_WARNING_POINTS[choice]
+    x, y = warning.rect[0] + relative_x, warning.rect[1] + relative_y
+    assert_new_dialog_visible(warning)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != warning.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Page-copy warning choice point is obscured", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    current = _record_window(warning.hwnd)
+    if current is None or current.fingerprint != warning.fingerprint or foreground_window() != warning.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Page-copy warning changed at choice boundary", retryable=True)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
+def select_new_dialog_work_icon(dialog: WindowRecord, icon_index: int, expected_last_input_tick: int) -> tuple[int, int]:
+    if type(icon_index) is not int or icon_index not in range(1, 7):
+        raise BridgeError("E_POLICY_DENIED", "Work icon index must be 1..6", stage="validation")
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) not in {NEW_DIALOG_SIZE, NEW_DIALOG_EXPANDED_SIZE}:
+        raise BridgeError("E_POLICY_DENIED", "Work icon requires an observed New-dialog layout", stage="validation")
+    x = dialog.rect[0] + NEW_DIALOG_WORK_ICONS[icon_index - 1]
+    y = dialog.rect[1] + 58
+    assert_new_dialog_visible(dialog)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != dialog.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Work icon point is no longer on the New dialog", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
+def send_expanded_new_dialog_escape(dialog: WindowRecord, expected_last_input_tick: int) -> None:
+    """Send one Escape only while the exact expanded New HWND is foreground."""
+    current = _record_window(dialog.hwnd)
+    if current is None or current.fingerprint != dialog.fingerprint or foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Expanded New dialog identity or focus changed", retryable=True)
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != NEW_DIALOG_EXPANDED_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Escape route requires the observed expanded New dialog", stage="validation")
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    latest = _record_window(dialog.hwnd)
+    if foreground_window() != dialog.hwnd or latest is None or latest.fingerprint != dialog.fingerprint:
+        raise BridgeError("E_USER_INTERRUPTED", "Expanded New dialog changed at the Escape boundary", retryable=True)
+    key = VK["ESCAPE"]
+    try:
+        _send([_key(key, False), _key(key, True)])
+    except BridgeError:
+        _best_effort_release([_key(key, True)])
+        raise
+
+
+def confirm_expanded_new_dialog(dialog: WindowRecord, expected_last_input_tick: int) -> tuple[int, int]:
+    """Click only the observed OK button on an already captured Comic layout."""
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != NEW_DIALOG_EXPANDED_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Confirm requires the observed expanded New dialog", stage="validation")
+    x = dialog.rect[0] + NEW_DIALOG_EXPANDED_OK_POINT[0]
+    y = dialog.rect[1] + NEW_DIALOG_EXPANDED_OK_POINT[1]
+    assert_new_dialog_visible(dialog)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != dialog.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "New dialog OK point is obscured", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    current = _record_window(dialog.hwnd)
+    if current is None or current.fingerprint != dialog.fingerprint or foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Expanded New dialog changed at confirmation boundary", retryable=True)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
+def enable_new_comic_multiple_pages(dialog: WindowRecord, expected_last_input_tick: int) -> tuple[int, int]:
+    """Click the observed unchecked Multiple pages box once on the Comic form."""
+    if (dialog.rect[2] - dialog.rect[0], dialog.rect[3] - dialog.rect[1]) != NEW_DIALOG_EXPANDED_SIZE:
+        raise BridgeError("E_POLICY_DENIED", "Multiple pages requires the observed expanded New layout", stage="validation")
+    x, y = dialog.rect[0] + 29, dialog.rect[1] + 607
+    assert_new_dialog_visible(dialog)
+    point = window_at_point(x, y)
+    if _pid_for_window(point) != dialog.pid or int(win32gui.GetAncestor(point, win32con.GA_ROOT) or 0) != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Multiple pages point is obscured", retryable=True)
+    _assert_initial_input_authority(None, expected_last_input_tick)
+    current = _record_window(dialog.hwnd)
+    if current is None or current.fingerprint != dialog.fingerprint or foreground_window() != dialog.hwnd:
+        raise BridgeError("E_USER_INTERRUPTED", "Comic New dialog changed at checkbox boundary", retryable=True)
+    try:
+        _send([
+            _absolute_mouse_input(x, y, MOUSEEVENTF_MOVE),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTDOWN),
+            _absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP),
+        ])
+    except BridgeError:
+        _best_effort_release([_absolute_mouse_input(x, y, MOUSEEVENTF_LEFTUP)])
+        raise
+    return x, y
+
+
 def assert_foreground_target(record: WindowRecord) -> None:
     foreground = foreground_window()
     if record.required_foreground_hwnd and foreground != record.required_foreground_hwnd:
@@ -1664,7 +2255,7 @@ def _native_file_dialog_controls(dialog_hwnd: int) -> tuple[int, int, str]:
         item for item in children
         if item["className"] == "SHELLDLL_DefView" and item["controlId"] == 1121 and item["visible"]
     ]
-    edits = [
+    legacy_edits = [
         item for item in children
         if item["className"] == "Edit"
         and item["controlId"] in {1148, 1152}
@@ -1678,6 +2269,41 @@ def _native_file_dialog_controls(dialog_hwnd: int) -> tuple[int, int, str]:
         and item["visible"]
         and item["enabled"]
     ]
+    # The Windows 11 common Save As dialog used by this CSP build puts its
+    # filename Edit (ID 1001) inside the modern DirectUI control chain.
+    by_hwnd = {int(item["hwnd"]): item for item in children}
+    modern_edits = [
+        item for item in children
+        if item["className"] == "Edit"
+        and item["controlId"] == 1001
+        and item["visible"]
+        and item["enabled"]
+    ]
+
+    def matches_modern_chain(item: dict[str, Any]) -> bool:
+        parent = int(item["parent"])
+        for expected_class in (
+            "ComboBox", "FloatNotifySink", "DirectUIHWND", "DUIViewWndClassName"
+        ):
+            ancestor = by_hwnd.get(parent)
+            if ancestor is None or ancestor["className"] != expected_class:
+                return False
+            parent = int(ancestor["parent"])
+        return parent == dialog_hwnd
+
+    modern_save = (
+        win32gui.GetWindowText(dialog_hwnd) == "Save as"
+        and len(ok_buttons) == 1
+        and str(ok_buttons[0]["text"]) == "&Save"
+        and len(modern_edits) == 1
+        and matches_modern_chain(modern_edits[0])
+    )
+    if len(legacy_edits) == 1 and not modern_edits:
+        edits = legacy_edits
+    elif not legacy_edits and modern_save:
+        edits = modern_edits
+    else:
+        edits = []
     if len(shell_views) != 1 or len(edits) != 1 or len(ok_buttons) != 1:
         raise BridgeError(
             "E_CAPABILITY_UNAVAILABLE",
@@ -1686,6 +2312,8 @@ def _native_file_dialog_controls(dialog_hwnd: int) -> tuple[int, int, str]:
             details={
                 "shellViewCount": len(shell_views),
                 "fileNameEditCount": len(edits),
+                "legacyFileNameEditCount": len(legacy_edits),
+                "modernFileNameEditCount": len(modern_edits),
                 "okButtonCount": len(ok_buttons),
             },
         )

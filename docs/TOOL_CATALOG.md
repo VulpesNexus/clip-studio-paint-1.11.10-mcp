@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server exposes 33 tools, all scoped to Clip Studio Paint.
+The server defines 44 tools, all scoped to Clip Studio Paint. A running MCP process must reconnect before it exposes newly added tools.
 
 ## Read-only inspection
 
@@ -12,6 +12,10 @@ The server exposes 33 tools, all scoped to Clip Studio Paint.
 | `csp_list_windows` | CSP main windows, physical coordinates, DPI, and window fingerprints |
 | `csp_get_state` | Foreground, windows, dialogs, and a transient revision |
 | `csp_capture` | An MCP image of the CSP window or a region of it, with a captureId |
+| `csp_capture_new_dialog` | An image of an exact profiled CSP 1.11.10 New layout, with a captureId for one fixed icon or expanded OK action |
+| `csp_new_dialog_owner_diagnostic` | Read-only owner PID, visibility, class, and geometry for that exact New dialog |
+| `csp_expanded_new_dialog_overlaps` | Read-only z-order and identity of windows overlapping the exact 909×833 New dialog |
+| `csp_capture_page_copy_warning` | Captures only the exact 438×109 CSP page-managed Save As copy warning |
 | `csp_compare_captures` | Share of changed pixels between two captures |
 | `csp_sample_pixel` | RGBA at normalized capture coordinates |
 | `csp_inspect_ui` | Win32 child windows and native dialogs |
@@ -27,6 +31,7 @@ The server exposes 33 tools, all scoped to Clip Studio Paint.
 | `csp_window_action` | Restore, maximize, or minimize |
 | `csp_wait_visual_change` | Waits for a capture to reach a change threshold |
 | `csp_cancel` | Sends one Escape, only to the exact main window or the single standard CSP dialog |
+| `csp_cancel_expanded_new_dialog` | Focuses the exact 909×833 New dialog and sends one Escape without generic capture |
 
 ## Visible UI input
 
@@ -42,6 +47,12 @@ The server exposes 33 tools, all scoped to Clip Studio Paint.
 | `csp_run_auto_action` | A registered Auto Action |
 | `csp_run_command_sequence` | A sequence of non-destructive registered commands |
 | `csp_preflight` | Approves an exact tool name with its full parameters and focuses CSP; ordinary input must capture again after approval |
+| `csp_new_dialog_preflight` | Binds one work-icon index to the exact New dialog before a fresh dialog capture |
+| `csp_select_new_dialog_work_icon` | Consumes that approval and capture for one of six fixed work-icon clicks |
+| `csp_new_comic_confirm_preflight` | Focuses the expanded New dialog and binds its fixed OK button before a fresh capture |
+| `csp_confirm_blank_comic` | Consumes the inspected expanded capture to click only OK; does not save the document |
+| `csp_page_copy_warning_preflight` | Binds one fixed OK or Cancel warning choice; OK also binds an allowlisted new output path as intent |
+| `csp_choose_page_copy_warning` | Consumes the fresh warning capture for one fixed choice; never enters a file path |
 
 ## File exchange
 
@@ -57,9 +68,11 @@ The server exposes 33 tools, all scoped to Clip Studio Paint.
 
 ## Boundaries
 
-The primitives cover visible windows, captures, limited keyboard and mouse input, registered commands and Auto Actions, and allowlisted file exchange. The 10 atomic input tools pass through Codex's approval layer, but the server requires each to present an exact, single-use token from `csp_preflight`, which itself still needs human approval.
+The primitives cover visible windows, captures, limited keyboard and mouse input, registered commands and Auto Actions, and allowlisted file exchange. Ordinary atomic input tools pass through Codex's approval layer and require an exact, single-use token from `csp_preflight`. The dedicated New-dialog icon route has its own exact preflight and capture; its expanded-dialog Escape route is limited to one recovery key.
 
 Any visible standard `#32770` dialog revokes ordinary capture authorization and blocks generic input; only the token-bound file-dialog tool or an exact cancel may act on it. Production policy refuses *Ctrl+S*, Auto Actions declared as file I/O or not attested as free of it, and account, cloud, and publishing workflows. The server cannot parse *.laf* files to prove such an attestation true.
+
+The dedicated New-dialog work-icon route does not change ordinary main-window or file-dialog guards. It has no text, path, field-editing, or submit action. Its October 14 source and negative tests await execution and live acceptance in a freshly connected MCP process.
 
 Registered commands, administrator attestations, and before-and-after captures raise confidence in visible results; they do not verify document or layer semantics. CSP has no public document or layer object API, so tools such as `get_layers`, `set_brush_object`, or a headless render cannot be implemented honestly.
 

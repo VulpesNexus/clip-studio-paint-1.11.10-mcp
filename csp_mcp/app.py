@@ -18,6 +18,10 @@ Before any atomic input, call csp_preflight with the exact tool name and full pa
 For ordinary input, capture again after preflight focuses CSP; use that fresh captureId
 and the single-use confirmToken. File-dialog tokens bind the exact main/dialog HWNDs.
 When a standard #32770 dialog appears, use only csp_native_file_dialog or csp_cancel.
+For the exact profiled New dialog, use only its dedicated capture, work-icon,
+overlap-diagnostic, or expanded-cancel tools; generic input remains unavailable.
+For the exact page-managed Save As copy warning, use only its dedicated capture
+and fixed choice; inspect any later #32770 file dialog before path input.
 Screenshot changes do not establish layer semantics. Stop on user input, version/DPI
 mismatch, or ambiguous windows. Windows culture is unrestricted by default; explicit
 locale pins remain supported. Native file-dialog labels are verified independently
@@ -157,6 +161,122 @@ async def csp_wait_visual_change(capture_id: str, threshold: float = 0.002, time
 @mcp.tool(name="csp_cancel", title="Cancel the current CSP operation", description="Waits until the user is idle, focuses CSP, sends one Escape, and verifies the result with before and after captures.", annotations=UI_NONIDEMPOTENT, structured_output=True)
 async def csp_cancel(hwnd: int = 0) -> ToolEnvelope:
     return await _call(controller.cancel, hwnd)
+
+
+@mcp.tool(name="csp_cancel_expanded_new_dialog", title="Cancel the expanded CSP New dialog", description="Focuses only the exact profiled 909x833 CSP 1.11.10 New dialog while CSP is foreground, sends one Escape, and checks whether it disappeared. Does not use generic capture or path input.", annotations=UI_NONIDEMPOTENT, structured_output=True)
+async def csp_cancel_expanded_new_dialog(dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.cancel_expanded_new_dialog, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_new_dialog_owner_diagnostic", title="Inspect the exact New-dialog owner", description="Read-only diagnostic of the owner PID, visibility, class, geometry, and executable match for the profiled foreground CSP 1.11.10 New dialog. Accepts no arbitrary window target.", annotations=RO, structured_output=True)
+async def csp_new_dialog_owner_diagnostic(dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.new_dialog_owner_diagnostic, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_expanded_new_dialog_overlaps", title="Inspect expanded New-dialog overlap", description="Read-only exact-profile diagnostic of visible top-level windows above the 909x833 CSP New dialog. Reports only windows intersecting that dialog; grants no input authority.", annotations=RO, structured_output=True)
+async def csp_expanded_new_dialog_overlaps(dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.expanded_new_dialog_overlaps, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_new_dialog_preflight", title="Approve a New-dialog work icon", description="Binds one work-type icon index 1..6 to the exact signed CSP New dialog, main window, foreground, and current input state. Capture the dialog afterward.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_new_dialog_preflight(icon_index: int, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.new_dialog_preflight, icon_index, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_capture_new_dialog", title="Capture the CSP New dialog", description="Captures only an exact profiled New layout after verifying the signed CSP process, unique main window, foreground, and lack of overlapping windows. A fresh capture can authorize one work-icon action, or the expanded Comic OK action with its separate preflight.", annotations=RO, structured_output=False)
+async def csp_capture_new_dialog(dialog_hwnd: int, main_hwnd: int) -> list[TextContent | ImageContent]:
+    metadata, png = await _call(controller.capture_new_dialog, dialog_hwnd, main_hwnd)
+    return [
+        TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png"),
+    ]
+
+
+@mcp.tool(name="csp_select_new_dialog_work_icon", title="Select a New-dialog work icon", description="Consumes a single-use approval and later matching capture for one left click on work icon 1..6. Rejects text and paths; inspect a fresh capture afterward.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_select_new_dialog_work_icon(icon_index: int, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.select_new_dialog_work_icon, icon_index, capture_id, confirm_token, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_new_comic_multiple_pages_preflight", title="Approve Multiple pages checkbox", description="Binds one fixed checkbox click to the exact 909x833 Comic New dialog. Capture afterward and proceed only when Multiple pages is visibly unchecked.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_new_comic_multiple_pages_preflight(dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.new_comic_multiple_pages_preflight, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_enable_new_comic_multiple_pages", title="Enable Comic Multiple pages", description="Consumes a single-use approval and later matching capture to click only the observed Multiple pages checkbox. Capture the resulting form before any page settings.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_enable_new_comic_multiple_pages(capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.enable_new_comic_multiple_pages, capture_id, confirm_token, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_new_comic_confirm_preflight", title="Approve blank Comic creation", description="Focuses only the exact 909x833 CSP New dialog and issues a single-use token for its fixed OK button. Capture and inspect Comic settings afterward before confirming.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_new_comic_confirm_preflight(dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.new_comic_confirm_preflight, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_confirm_blank_comic", title="Create the inspected blank Comic document", description="Consumes an exact post-preflight expanded New-dialog capture and single-use token, then clicks only the fixed OK button. Does not save or export the document.", annotations=NEW, structured_output=True)
+async def csp_confirm_blank_comic(capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.confirm_blank_comic, capture_id, confirm_token, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_cst_conversion_preflight", title="Approve isolated CST conversion", description="Binds one OK choice on the exact 300x116 CSP conversion warning to a manifest-verified copied CST under the cst_copy root. Originals are rejected. Capture the warning afterward.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_cst_conversion_preflight(copy_path: str, warning_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.cst_conversion_preflight, copy_path, warning_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_capture_cst_conversion_warning", title="Capture isolated CST conversion warning", description="Captures the exact signed 300x116 conversion warning with no UI input. Use only after the copied CST preflight and inspect the text before OK.", annotations=RO, structured_output=False)
+async def csp_capture_cst_conversion_warning(warning_hwnd: int, main_hwnd: int) -> list[TextContent | ImageContent]:
+    metadata, png = await _call(controller.capture_cst_conversion_warning, warning_hwnd, main_hwnd)
+    return [
+        TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png"),
+    ]
+
+
+@mcp.tool(name="csp_accept_cst_conversion_warning", title="Convert isolated CST copy", description="Consumes a single-use token and matching later capture, rehashes the manifest and copied CST, and clicks only the measured conversion-warning OK. No external original path is accepted.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_accept_cst_conversion_warning(copy_path: str, capture_id: str, confirm_token: str, warning_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.accept_cst_conversion_warning, copy_path, capture_id, confirm_token, warning_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_cst_story_folder_preflight", title="Approve isolated CST story folder", description="Binds one OK choice on the exact 720x199 Create story folder dialog to a manifest-verified Demo or Sample_5 CST copy and its observed new management folder inside the exact workspace or ASCII temp copy root. Capture afterward.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_cst_story_folder_preflight(copy_path: str, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.cst_story_folder_preflight, copy_path, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_capture_cst_story_folder_dialog", title="Capture isolated CST story folder", description="Captures only the exact signed 720x199 Create story folder dialog with no UI input. Inspect location, folder name, and management file before OK.", annotations=RO, structured_output=False)
+async def csp_capture_cst_story_folder_dialog(dialog_hwnd: int, main_hwnd: int) -> list[TextContent | ImageContent]:
+    metadata, png = await _call(controller.capture_cst_story_folder_dialog, dialog_hwnd, main_hwnd)
+    return [
+        TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png"),
+    ]
+
+
+@mcp.tool(name="csp_confirm_cst_story_folder", title="Create isolated CST story folder", description="Consumes a single-use token and matching later capture, rechecks the copied CST and absent target folder, then clicks only the measured dialog OK. External originals are rejected.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_confirm_cst_story_folder(copy_path: str, capture_id: str, confirm_token: str, dialog_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.confirm_cst_story_folder, copy_path, capture_id, confirm_token, dialog_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_cancel_cst_conversion_error", title="Dismiss exact CST conversion error", description="Sends one Escape only to the measured signed CSP 231x109 conversion-error modal after exact main, owner, foreground, and input-state checks. It does not act on other dialogs.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_cancel_cst_conversion_error(error_hwnd: int, main_hwnd: int) -> ToolEnvelope:
+    return await _call(controller.cancel_cst_conversion_error, error_hwnd, main_hwnd)
+
+
+@mcp.tool(name="csp_page_copy_warning_preflight", title="Approve page-managed Save As warning choice", description="Binds one fixed OK or Cancel choice to the exact 438x109 CSP page-copy warning. Proceed requires an allowlisted new output path as intent only; it does not enter the path.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_page_copy_warning_preflight(choice: Literal["proceed_copy", "cancel"], warning_hwnd: int, main_hwnd: int, target_path: str = "") -> ToolEnvelope:
+    return await _call(controller.page_copy_warning_preflight, choice, warning_hwnd, main_hwnd, target_path)
+
+
+@mcp.tool(name="csp_capture_page_copy_warning", title="Capture page-managed Save As warning", description="Captures only the exact signed CSP 438x109 page-copy warning and returns a short-lived captureId. No file path or UI input.", annotations=RO, structured_output=False)
+async def csp_capture_page_copy_warning(warning_hwnd: int, main_hwnd: int) -> list[TextContent | ImageContent]:
+    metadata, png = await _call(controller.capture_page_copy_warning, warning_hwnd, main_hwnd)
+    return [
+        TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))),
+        ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png"),
+    ]
+
+
+@mcp.tool(name="csp_choose_page_copy_warning", title="Choose page-copy warning OK or Cancel", description="Consumes an exact post-preflight warning capture and single-use token for one fixed OK or Cancel click. Does not enter or submit any output path; inspect a later native file dialog separately.", annotations=EDIT_OPEN, structured_output=True)
+async def csp_choose_page_copy_warning(choice: Literal["proceed_copy", "cancel"], capture_id: str, confirm_token: str, warning_hwnd: int, main_hwnd: int, target_path: str = "") -> ToolEnvelope:
+    return await _call(controller.choose_page_copy_warning, choice, capture_id, confirm_token, warning_hwnd, main_hwnd, target_path)
 
 
 @mcp.tool(name="csp_move_pointer", title="Move the pointer within CSP", description="Consumes a single-use csp_preflight token bound to the exact parameters and moves the pointer to a CSP location bound to the captureId taken afterward.", annotations=UI, structured_output=True)

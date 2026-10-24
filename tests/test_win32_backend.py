@@ -25,10 +25,60 @@ from csp_mcp.win32_backend import (
     send_unicode_text,
     validate_keys,
     window_belongs_to_main,
+    verified_new_dialog,
+    assert_new_dialog_visible,
+    new_dialog_owner_diagnostic,
+    inspect_expanded_new_dialog_overlaps,
+    send_expanded_new_dialog_escape,
+    select_new_dialog_work_icon,
+    confirm_expanded_new_dialog,
+    enable_new_comic_multiple_pages,
+    verified_page_copy_warning,
+    choose_page_copy_warning,
+    verified_cst_conversion_warning,
+    accept_cst_conversion_warning,
+    verified_cst_story_folder_dialog,
+    confirm_cst_story_folder_dialog,
+    verified_cst_conversion_error,
+    send_cst_conversion_error_escape,
 )
 
 
 class Win32BackendTests(unittest.TestCase):
+    def test_modern_save_dialog_requires_unique_filename_ancestor_chain(self) -> None:
+        dialog = 10
+        children = [
+            {"hwnd": 11, "parent": dialog, "className": "SHELLDLL_DefView", "controlId": 1121, "visible": True, "enabled": True, "text": ""},
+            {"hwnd": 12, "parent": dialog, "className": "DUIViewWndClassName", "controlId": 0, "visible": True, "enabled": True, "text": ""},
+            {"hwnd": 13, "parent": 12, "className": "DirectUIHWND", "controlId": 0, "visible": True, "enabled": True, "text": ""},
+            {"hwnd": 14, "parent": 13, "className": "FloatNotifySink", "controlId": 0, "visible": True, "enabled": True, "text": ""},
+            {"hwnd": 15, "parent": 14, "className": "ComboBox", "controlId": 0, "visible": True, "enabled": True, "text": ""},
+            {"hwnd": 16, "parent": 15, "className": "Edit", "controlId": 1001, "visible": True, "enabled": True, "text": "sample_16.clip"},
+            {"hwnd": 17, "parent": dialog, "className": "Button", "controlId": backend.win32con.IDOK, "visible": True, "enabled": True, "text": "&Save"},
+        ]
+
+        def validate(items: list[dict[str, object]], title: str = "Save as") -> tuple[int, int, str]:
+            with (
+                patch.object(backend.win32gui, "IsWindow", return_value=True),
+                patch.object(backend.win32gui, "GetClassName", return_value="#32770"),
+                patch.object(backend.win32gui, "GetWindowText", return_value=title),
+                patch.object(backend, "inspect_child_windows", return_value=items),
+            ):
+                return backend._native_file_dialog_controls(dialog)
+
+        self.assertEqual(validate(children), (16, 17, "output"))
+        with self.assertRaises(BridgeError):
+            validate([{**item, "parent": dialog} if item["hwnd"] == 16 else item for item in children])
+        with self.assertRaises(BridgeError):
+            validate(children + [{**children[5], "hwnd": 18}])
+        with self.assertRaises(BridgeError):
+            validate(children, title="Open")
+        legacy = [
+            {**item, "controlId": 1148} if item["hwnd"] == 16 else item
+            for item in children
+        ]
+        self.assertEqual(validate(legacy), (16, 17, "output"))
+
     def setUp(self) -> None:
         self.window = WindowRecord(
             hwnd=1,
@@ -113,6 +163,380 @@ class Win32BackendTests(unittest.TestCase):
             self.assertTrue(window_belongs_to_main(10, 1))
             self.assertFalse(window_belongs_to_main(10, 2))
             self.assertFalse(window_belongs_to_main(2, 1))
+
+    def test_new_dialog_profile_rejects_ambiguous_and_detached_windows(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "New", "owner": 30,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (509, 303, 1009, 878), "client_rect": (509, 303, 1009, 878),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 30, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1), "client_rect": (0, 0, 1, 1),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, dialog]]),
+            patch.object(backend, "_record_window", return_value=owner),
+            patch.object(backend, "foreground_window", return_value=dialog.hwnd),
+        ):
+            self.assertEqual(verified_new_dialog(Path(main.executable), main, dialog.hwnd), dialog)
+        second_main = WindowRecord(**{**main.__dict__, "hwnd": 11})
+        with patch.object(backend, "enum_csp_windows", return_value=[main, second_main, dialog]):
+            with self.assertRaises(BridgeError):
+                verified_new_dialog(Path(main.executable), main, dialog.hwnd)
+        detached = WindowRecord(**{**dialog.__dict__, "owner": 999})
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, detached]]),
+            patch.object(backend, "_record_window", return_value=None),
+            patch.object(backend, "_pid_for_window", return_value=999),
+            patch.object(backend, "foreground_window", return_value=dialog.hwnd),
+        ):
+            with self.assertRaises(BridgeError):
+                verified_new_dialog(Path(main.executable), main, detached.hwnd)
+        moved = WindowRecord(**{**dialog.__dict__, "rect": (509, 303, 1010, 878)})
+        with patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, moved]]):
+            with self.assertRaises(BridgeError):
+                verified_new_dialog(Path(main.executable), main, moved.hwnd)
+        bad_owners = [
+            WindowRecord(**{**owner.__dict__, "pid": 999}),
+            WindowRecord(**{**owner.__dict__, "visible": False}),
+            WindowRecord(**{**owner.__dict__, "rect": (0, 0, 2, 1)}),
+            WindowRecord(**{**owner.__dict__, "class_name": main.class_name}),
+            WindowRecord(**{**owner.__dict__, "owner": 0}),
+            WindowRecord(**{**owner.__dict__, "title": "Other"}),
+            WindowRecord(**{**owner.__dict__, "executable": r"D:\Other.exe"}),
+        ]
+        for bad_owner in bad_owners:
+            with self.subTest(bad_owner=bad_owner):
+                with (
+                    patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, dialog]]),
+                    patch.object(backend, "_record_window", return_value=bad_owner),
+                ):
+                    with self.assertRaises(BridgeError) as raised:
+                        verified_new_dialog(Path(main.executable), main, dialog.hwnd)
+                    self.assertEqual(raised.exception.code, "E_WINDOW_AMBIGUOUS")
+
+    def test_new_dialog_capture_refuses_foreign_overlap(self) -> None:
+        dialog = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 20, "rect": (509, 303, 1009, 878),
+            "client_rect": (509, 303, 1009, 878), "dpi": 96,
+        })
+        with (
+            patch.object(backend, "foreground_window", return_value=20),
+            patch.object(backend, "_pid_for_window", return_value=dialog.pid),
+            patch.object(backend.win32gui, "GetWindow", return_value=99),
+            patch.object(backend.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(backend.win32gui, "IsIconic", return_value=False),
+            patch.object(backend, "visible_window_rect", return_value=(600, 400, 700, 500)),
+            patch.object(backend.win32gui, "GetClassName", return_value="ForeignPopup"),
+        ):
+            with self.assertRaises(BridgeError) as raised:
+                assert_new_dialog_visible(dialog)
+            self.assertEqual(raised.exception.code, "E_CAPABILITY_UNAVAILABLE")
+
+    def test_expanded_new_dialog_requires_opt_in_and_overlap_inspection_sends_no_input(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "New", "owner": 30,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (509, 303, 1418, 1136), "client_rect": (509, 303, 1418, 1136),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 30, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1),
+        })
+        foreign = WindowRecord(**{
+            **main.__dict__, "hwnd": 952, "pid": 999, "title": "Overlay",
+            "class_name": "ForeignPopup", "rect": (600, 400, 700, 500),
+            "executable": r"D:\Other.exe",
+        })
+        with patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, dialog]]):
+            with self.assertRaises(BridgeError):
+                verified_new_dialog(Path(main.executable), main, dialog.hwnd)
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, dialog]]),
+            patch.object(backend, "_record_window", side_effect=lambda hwnd: owner if hwnd == 30 else foreign),
+            patch.object(backend, "foreground_window", return_value=main.hwnd),
+            patch.object(backend.win32gui, "GetWindow", side_effect=lambda hwnd, _: 952 if hwnd == dialog.hwnd else 0),
+            patch.object(backend.win32gui, "IsWindowVisible", return_value=True),
+            patch.object(backend.win32gui, "IsIconic", return_value=False),
+            patch.object(backend, "visible_window_rect", return_value=foreign.rect),
+            patch.object(backend, "_send") as send,
+        ):
+            result = inspect_expanded_new_dialog_overlaps(Path(main.executable), main, dialog.hwnd)
+        self.assertEqual(result["overlaps"][0]["hwnd"], foreign.hwnd)
+        self.assertFalse(result["overlaps"][0]["executableMatchesPinned"])
+        self.assertFalse(result["authorizesInput"])
+        send.assert_not_called()
+
+    def test_expanded_new_dialog_escape_rejects_foreign_focus(self) -> None:
+        dialog = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 20, "rect": (509, 303, 1418, 1136),
+        })
+        with (
+            patch.object(backend, "_record_window", return_value=dialog),
+            patch.object(backend, "foreground_window", return_value=999),
+            patch.object(backend, "_send") as send,
+        ):
+            with self.assertRaises(BridgeError) as raised:
+                send_expanded_new_dialog_escape(dialog, 123)
+            self.assertEqual(raised.exception.code, "E_USER_INTERRUPTED")
+            send.assert_not_called()
+
+    def test_expanded_new_dialog_work_icon_uses_only_fixed_profiled_point(self) -> None:
+        dialog = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 20, "rect": (509, 303, 1418, 1136),
+            "client_rect": (509, 303, 1418, 1136),
+        })
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=20),
+            patch.object(backend, "_pid_for_window", return_value=dialog.pid),
+            patch.object(backend.win32gui, "GetAncestor", return_value=dialog.hwnd),
+            patch.object(backend, "_assert_initial_input_authority"),
+            patch.object(backend, "_send") as send,
+        ):
+            self.assertEqual(select_new_dialog_work_icon(dialog, 3, 123), (714, 361))
+            send.assert_called_once()
+        with patch.object(backend, "_send") as send:
+            with self.assertRaises(BridgeError):
+                select_new_dialog_work_icon(dialog, 7, 123)
+            send.assert_not_called()
+
+    def test_new_comic_confirmation_rejects_wrong_layout_before_input(self) -> None:
+        dialog = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 20, "rect": (509, 303, 1009, 878),
+        })
+        with patch.object(backend, "_send") as send:
+            with self.assertRaises(BridgeError):
+                confirm_expanded_new_dialog(dialog, 123)
+            send.assert_not_called()
+
+    def test_multiple_pages_click_requires_exact_visible_comic_dialog(self) -> None:
+        dialog = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 20, "rect": (509, 303, 1418, 1136),
+            "client_rect": (509, 303, 1418, 1136),
+        })
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=20),
+            patch.object(backend, "_pid_for_window", return_value=dialog.pid),
+            patch.object(backend.win32gui, "GetAncestor", return_value=dialog.hwnd),
+            patch.object(backend, "_assert_initial_input_authority"),
+            patch.object(backend, "_record_window", return_value=dialog),
+            patch.object(backend, "foreground_window", return_value=dialog.hwnd),
+            patch.object(backend, "_send") as send,
+        ):
+            self.assertEqual(enable_new_comic_multiple_pages(dialog, 123), (538, 910))
+            send.assert_called_once()
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=999),
+            patch.object(backend, "_pid_for_window", return_value=999),
+            patch.object(backend, "_send") as send,
+        ):
+            with self.assertRaises(BridgeError):
+                enable_new_comic_multiple_pages(dialog, 123)
+            send.assert_not_called()
+
+    def test_page_copy_warning_profile_and_fixed_choice(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        warning = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "CLIP STUDIO PAINT EX", "owner": 30,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (1061, 427, 1499, 536), "client_rect": (1061, 427, 1499, 536),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 30, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, warning]]),
+            patch.object(backend, "_record_window", return_value=owner),
+            patch.object(backend, "foreground_window", return_value=warning.hwnd),
+        ):
+            self.assertEqual(verified_page_copy_warning(Path(main.executable), main, warning.hwnd), warning)
+        wrong = WindowRecord(**{**warning.__dict__, "title": "Other"})
+        with patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, wrong]]):
+            with self.assertRaises(BridgeError):
+                verified_page_copy_warning(Path(main.executable), main, wrong.hwnd)
+        resized = WindowRecord(**{**warning.__dict__, "rect": (1061, 427, 1500, 536)})
+        with patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, resized]]):
+            with self.assertRaises(BridgeError):
+                verified_page_copy_warning(Path(main.executable), main, resized.hwnd)
+        foreign_owner = WindowRecord(**{**owner.__dict__, "pid": 999})
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, warning]]),
+            patch.object(backend, "_record_window", return_value=foreign_owner),
+        ):
+            with self.assertRaises(BridgeError):
+                verified_page_copy_warning(Path(main.executable), main, warning.hwnd)
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=warning.hwnd),
+            patch.object(backend, "_pid_for_window", return_value=warning.pid),
+            patch.object(backend.win32gui, "GetAncestor", return_value=warning.hwnd),
+            patch.object(backend, "_assert_initial_input_authority"),
+            patch.object(backend, "_record_window", return_value=warning),
+            patch.object(backend, "foreground_window", return_value=warning.hwnd),
+            patch.object(backend, "_send") as send,
+        ):
+            self.assertEqual(choose_page_copy_warning(warning, "proceed_copy", 123), (1355, 512))
+            send.assert_called_once()
+        with patch.object(backend, "_send") as send:
+            with self.assertRaises(BridgeError):
+                choose_page_copy_warning(warning, "toggle_checkbox", 123)
+            send.assert_not_called()
+
+    def test_new_owner_diagnostic_refuses_arbitrary_window(self) -> None:
+        main = WindowRecord(**{**self.window.__dict__, "class_name": "CspMain", "dpi": 96})
+        unrelated = WindowRecord(**{
+            **main.__dict__, "hwnd": 22, "title": "Other", "owner": 33,
+            "rect": (200, 200, 700, 775),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, unrelated]]),
+            patch.object(backend, "foreground_window", return_value=unrelated.hwnd),
+        ):
+            with self.assertRaises(BridgeError):
+                new_dialog_owner_diagnostic(Path(main.executable), main, unrelated.hwnd)
+
+    def test_cst_story_folder_requires_exact_profile_and_fixed_ok(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        dialog = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "Create story folder", "owner": 7147922,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (655, 420, 1375, 619), "client_rect": (655, 420, 1375, 619),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 7147922, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, dialog]]),
+            patch.object(backend, "_record_window", return_value=owner),
+            patch.object(backend, "foreground_window", return_value=dialog.hwnd),
+        ):
+            self.assertEqual(verified_cst_story_folder_dialog(Path(main.executable), main, dialog.hwnd), dialog)
+        for changed in (
+            WindowRecord(**{**dialog.__dict__, "owner": 999}),
+            WindowRecord(**{**dialog.__dict__, "rect": (655, 420, 1376, 619)}),
+            WindowRecord(**{**dialog.__dict__, "title": "Other"}),
+        ):
+            with (
+                patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, changed]]),
+                patch.object(backend, "_record_window", return_value=owner),
+            ):
+                with self.assertRaises(BridgeError):
+                    verified_cst_story_folder_dialog(Path(main.executable), main, changed.hwnd)
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=dialog.hwnd),
+            patch.object(backend, "_pid_for_window", return_value=dialog.pid),
+            patch.object(backend.win32gui, "GetAncestor", return_value=dialog.hwnd),
+            patch.object(backend, "_assert_initial_input_authority"),
+            patch.object(backend, "_record_window", return_value=dialog),
+            patch.object(backend, "foreground_window", return_value=dialog.hwnd),
+            patch.object(backend, "_send") as send,
+        ):
+            self.assertEqual(confirm_cst_story_folder_dialog(dialog, 123), (1320, 466))
+            send.assert_called_once()
+
+    def test_cst_error_escape_requires_exact_foreground_modal(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        error = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "CLIP STUDIO PAINT EX", "owner": 7147922,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (1164, 427, 1395, 536), "client_rect": (1164, 427, 1395, 536),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 7147922, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, error]]),
+            patch.object(backend, "_record_window", return_value=owner),
+            patch.object(backend, "foreground_window", return_value=error.hwnd),
+        ):
+            self.assertEqual(verified_cst_conversion_error(Path(main.executable), main, error.hwnd), error)
+        wrong = WindowRecord(**{**error.__dict__, "rect": (1164, 427, 1396, 536)})
+        with patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, wrong]]):
+            with self.assertRaises(BridgeError):
+                verified_cst_conversion_error(Path(main.executable), main, wrong.hwnd)
+        with (
+            patch.object(backend, "_record_window", return_value=error),
+            patch.object(backend, "foreground_window", return_value=999),
+            patch.object(backend, "_send") as send,
+        ):
+            with self.assertRaises(BridgeError):
+                send_cst_conversion_error_escape(error, 123)
+            send.assert_not_called()
+
+    def test_cst_conversion_accepts_only_exact_warning_and_ok_point(self) -> None:
+        main = WindowRecord(**{
+            **self.window.__dict__, "hwnd": 10, "class_name": "CspMain",
+            "rect": (0, 0, 2560, 1392), "dpi": 96,
+        })
+        warning = WindowRecord(**{
+            **main.__dict__, "hwnd": 20, "title": "CLIP STUDIO PAINT EX", "owner": 7147922,
+            "class_name": main.class_name + backend.NEW_DIALOG_CLASS_SUFFIX,
+            "rect": (1130, 425, 1430, 541), "client_rect": (1130, 425, 1430, 541),
+        })
+        owner = WindowRecord(**{
+            **main.__dict__, "hwnd": 7147922, "title": "", "owner": main.hwnd,
+            "class_name": main.class_name + backend.NEW_DIALOG_OWNER_CLASS_SUFFIX,
+            "rect": (0, 0, 1, 1),
+        })
+        with (
+            patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, warning]]),
+            patch.object(backend, "_record_window", return_value=owner),
+            patch.object(backend, "foreground_window", return_value=warning.hwnd),
+        ):
+            self.assertEqual(verified_cst_conversion_warning(Path(main.executable), main, warning.hwnd), warning)
+        for changed in (
+            WindowRecord(**{**warning.__dict__, "owner": 999}),
+            WindowRecord(**{**warning.__dict__, "rect": (1130, 425, 1431, 541)}),
+            WindowRecord(**{**warning.__dict__, "title": "Other"}),
+        ):
+            with (
+                patch.object(backend, "enum_csp_windows", side_effect=[[main], [main, changed]]),
+                patch.object(backend, "_record_window", return_value=owner),
+            ):
+                with self.assertRaises(BridgeError):
+                    verified_cst_conversion_warning(Path(main.executable), main, changed.hwnd)
+        with (
+            patch.object(backend, "assert_new_dialog_visible"),
+            patch.object(backend, "window_at_point", return_value=warning.hwnd),
+            patch.object(backend, "_pid_for_window", return_value=warning.pid),
+            patch.object(backend.win32gui, "GetAncestor", return_value=warning.hwnd),
+            patch.object(backend, "_assert_initial_input_authority"),
+            patch.object(backend, "_record_window", return_value=warning),
+            patch.object(backend, "foreground_window", return_value=warning.hwnd),
+            patch.object(backend, "_send") as send,
+        ):
+            self.assertEqual(accept_cst_conversion_warning(warning, 123), (1286, 518))
+            send.assert_called_once()
 
     def test_partial_virtual_desktop_rect_is_not_input_safe(self) -> None:
         metrics = {
