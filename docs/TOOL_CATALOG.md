@@ -1,6 +1,6 @@
 # Tool catalog
 
-The server defines 44 tools, all scoped to Clip Studio Paint. A running MCP process must reconnect before it exposes newly added tools.
+The server defines 53 tools, all scoped to Clip Studio Paint. A running MCP process must reconnect before it exposes newly added tools.
 
 ## Read-only inspection
 
@@ -16,6 +16,8 @@ The server defines 44 tools, all scoped to Clip Studio Paint. A running MCP proc
 | `csp_new_dialog_owner_diagnostic` | Read-only owner PID, visibility, class, and geometry for that exact New dialog |
 | `csp_expanded_new_dialog_overlaps` | Read-only z-order and identity of windows overlapping the exact 909×833 New dialog |
 | `csp_capture_page_copy_warning` | Captures only the exact 438×109 CSP page-managed Save As copy warning |
+| `csp_capture_cst_conversion_warning` | Captures only the exact 300×116 CSP conversion warning for a copied CST, with no input |
+| `csp_capture_cst_story_folder_dialog` | Captures only the exact 720×199 Create story folder dialog, with no input |
 | `csp_compare_captures` | Share of changed pixels between two captures |
 | `csp_sample_pixel` | RGBA at normalized capture coordinates |
 | `csp_inspect_ui` | Win32 child windows and native dialogs |
@@ -32,6 +34,7 @@ The server defines 44 tools, all scoped to Clip Studio Paint. A running MCP proc
 | `csp_wait_visual_change` | Waits for a capture to reach a change threshold |
 | `csp_cancel` | Sends one Escape, only to the exact main window or the single standard CSP dialog |
 | `csp_cancel_expanded_new_dialog` | Focuses the exact 909×833 New dialog and sends one Escape without generic capture |
+| `csp_cancel_cst_conversion_error` | Sends one Escape only to the exact 231×109 CSP conversion-error modal |
 
 ## Visible UI input
 
@@ -51,8 +54,14 @@ The server defines 44 tools, all scoped to Clip Studio Paint. A running MCP proc
 | `csp_select_new_dialog_work_icon` | Consumes that approval and capture for one of six fixed work-icon clicks |
 | `csp_new_comic_confirm_preflight` | Focuses the expanded New dialog and binds its fixed OK button before a fresh capture |
 | `csp_confirm_blank_comic` | Consumes the inspected expanded capture to click only OK; does not save the document |
+| `csp_new_comic_multiple_pages_preflight` | Binds one fixed Multiple pages checkbox click to the exact 909×833 Comic New dialog before a fresh capture |
+| `csp_enable_new_comic_multiple_pages` | Consumes that approval and capture to click only the Multiple pages checkbox |
 | `csp_page_copy_warning_preflight` | Binds one fixed OK or Cancel warning choice; OK also binds an allowlisted new output path as intent |
 | `csp_choose_page_copy_warning` | Consumes the fresh warning capture for one fixed choice; never enters a file path |
+| `csp_cst_conversion_preflight` | Binds one OK choice on the exact conversion warning to a manifest-verified CST copy under the `cst_copy` root; originals are rejected |
+| `csp_accept_cst_conversion_warning` | Consumes that approval and capture, rehashes the manifest and copy, and clicks only the warning's OK |
+| `csp_cst_story_folder_preflight` | Binds one OK choice on the exact Create story folder dialog to a manifest-verified CST copy and its new management folder |
+| `csp_confirm_cst_story_folder` | Consumes that approval and capture, rechecks the copy and the absent target folder, and clicks only the dialog's OK |
 
 ## File exchange
 

@@ -53,7 +53,7 @@ The full flow, the registered commands, and the overlay setting: [usage](docs/US
 
 - [Setup](docs/SETUP.md): configuration, installation, tests, and registration in detail.
 - [Usage](docs/USAGE.md): the approval flow, registered commands, files, and overlays.
-- [Tool catalog](docs/TOOL_CATALOG.md): all 33 tools.
+- [Tool catalog](docs/TOOL_CATALOG.md): all 53 tools.
 - [Auto Actions setup](docs/AUTO_ACTIONS.md)
 - [Security model](docs/SECURITY.md)
 - [Compatibility with other CSP versions](docs/COMPATIBILITY.md)

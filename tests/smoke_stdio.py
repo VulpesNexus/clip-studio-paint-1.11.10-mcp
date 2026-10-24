@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import time
 import uuid
@@ -31,17 +32,8 @@ async def main() -> None:
             await session.initialize()
             listed = await session.list_tools()
             tools = {tool.name: tool for tool in listed.tools}
-            expected = {
-                "csp_health", "csp_capabilities", "csp_get_activity", "csp_list_windows",
-                "csp_get_state", "csp_capture", "csp_compare_captures", "csp_sample_pixel",
-                "csp_inspect_ui", "csp_list_commands", "csp_list_auto_actions", "csp_launch",
-                "csp_focus", "csp_window_action", "csp_wait_visual_change", "csp_cancel",
-                "csp_move_pointer", "csp_click", "csp_drag", "csp_scroll", "csp_type_text",
-                "csp_navigation_key", "csp_preflight", "csp_run_command",
-                "csp_run_auto_action", "csp_run_command_sequence", "csp_validate_path",
-                "csp_list_assets", "csp_file_info", "csp_scan_exports", "csp_wait_for_file",
-                "csp_open_document", "csp_native_file_dialog",
-            }
+            catalog = (PROJECT_ROOT / "docs" / "TOOL_CATALOG.md").read_text(encoding="utf-8")
+            expected = set(re.findall(r"\| `(csp_[^`]+)` \|", catalog))
             assert tools.keys() == expected, {
                 "missing": sorted(expected - tools.keys()),
                 "unexpected": sorted(tools.keys() - expected),
@@ -58,13 +50,18 @@ async def main() -> None:
             }
             for name in token_gated:
                 assert "confirm_token" in tools[name].inputSchema.get("required", []), name
-            assert tools["csp_capture"].outputSchema is None
+            image_tools = {
+                "csp_capture", "csp_capture_new_dialog", "csp_capture_page_copy_warning",
+                "csp_capture_cst_conversion_warning", "csp_capture_cst_story_folder_dialog",
+            }
+            for name in image_tools:
+                assert tools[name].outputSchema is None, name
             envelope_fields = {
                 "ok", "operationId", "stateRevisionBefore", "stateRevisionAfter",
                 "stateChange", "result", "verification", "warnings",
             }
             for name, tool in tools.items():
-                if name == "csp_capture":
+                if name in image_tools:
                     continue
                 assert tool.outputSchema is not None, name
                 assert envelope_fields <= set(tool.outputSchema.get("required", [])), {
