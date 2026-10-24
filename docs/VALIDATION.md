@@ -2,6 +2,13 @@
 
 Evidence for the `csp-1.11.10-dpi96-v1` profile: CLIP STUDIO PAINT 1.11.10.0 at window DPI 96, on Windows 11 with a French display language. Newest first.
 
+## 2026-10-25: first full install on the owner machine
+
+- PR #2 merged: the PowerShell audit accepts the CST path roots, the root policy is single-sourced from `csp_mcp/config.py` with a drift test, and a PowerShell policy test runs in CI under 5.1 and 7.
+- Machine ACL remediation (owner-run): orphaned foreign-SID grants and `Authenticated Users` Modify removed from the project folder, the `cst_copy` root, and the `cst_ascii_copy` root; explicit owner `FullControl` in place; inheritance isolated per folder.
+- *install.ps1* completed end to end for the first time: ACL asserts passed on all audited targets, Python 3.14 venv accepted, hash-verified lockfile, `pip check` clean, production profile passed runtime validation. Unit suite from the installed venv: 92 tests, all pass.
+- Fixed during this pass: a second PowerShell 5.1 embedded-quote `-c` argument (the venv version check f-string), and pip logging crashes on the ANSI codepage (`PYTHONIOENCODING=utf-8` for child Python calls).
+
 ## 2026-10-25: Python 3.14 support
 
 - The installer accepts CPython 3.13 and 3.14, and CI runs the unit suite on both. The dependency lockfile resolves identically for both minors.

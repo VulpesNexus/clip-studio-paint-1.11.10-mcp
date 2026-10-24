@@ -5,6 +5,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# UTF-8 for every child Python call: redirected output under this machine's
+# ANSI codepage cannot encode the repository path (en dash), which crashes
+# pip's logging handler ("--- Logging error ---") and pollutes stderr.
+$env:PYTHONIOENCODING = 'utf-8'
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 
@@ -222,7 +226,9 @@ if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
     }
 }
 
-$VenvVersion = & $VenvPython -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+# No double quotes in this code: PowerShell 5.1 strips embedded quotes when
+# passing -c arguments to native executables (same issue as the probe above).
+$VenvVersion = & $VenvPython -c 'import sys; print(str(sys.version_info.major)+chr(46)+str(sys.version_info.minor))'
 if ($LASTEXITCODE -ne 0 -or ([string]$VenvVersion).Trim() -notin @('3.13', '3.14')) {
     throw 'The existing project virtual environment is not based on Python 3.13 or 3.14.'
 }
