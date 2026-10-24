@@ -19,7 +19,8 @@ from csp_mcp.win32_backend import CaptureData, WindowRecord
 class ControllerStateTests(unittest.TestCase):
     def test_cst_story_destination_rejects_existing_folder_and_other_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            copy_root = Path(temporary)
+            # Resolve, as the controller does: Windows runners hand out 8.3 short temp paths.
+            copy_root = Path(temporary).resolve()
             demo = copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst"
             demo.parent.mkdir()
             demo.write_bytes(b"copy")
@@ -91,7 +92,7 @@ class ControllerStateTests(unittest.TestCase):
 
     def test_cst_conversion_requires_manifest_verified_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            copy_root = Path(temporary)
+            copy_root = Path(temporary).resolve()
             target = copy_root / "cs4-SampleData_1" / "CS4DemoSample.cst"
             target.parent.mkdir()
             target.write_bytes(b"isolated cst copy")
@@ -125,7 +126,7 @@ class ControllerStateTests(unittest.TestCase):
         )
         for project_name, cst_name, count in profiles:
             with self.subTest(project=project_name), tempfile.TemporaryDirectory() as temporary:
-                parent = Path(temporary)
+                parent = Path(temporary).resolve()
                 ascii_root = parent / "ascii"
                 workspace_root = parent / "workspace"
                 project = ascii_root / project_name
