@@ -21,9 +21,15 @@ import win32api
 import win32con
 import win32gui
 import win32process
-from PIL import Image, ImageGrab, ImageStat
+from PIL import Image, ImageGrab, ImageStat, UnidentifiedImageError
 
 from .errors import BridgeError
+
+
+# Decompression-bomb cap. Decoded images are this server's own window captures
+# (at most 1,600 px wide), so 50 MP is ample and tighter than Pillow's default.
+# Pillow only warns between 1x and 2x this value; _open_png rejects that band too.
+Image.MAX_IMAGE_PIXELS = 50_000_000
 
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -1627,8 +1633,31 @@ def capture_window(
     )
 
 
+def _open_png(png: bytes) -> Image.Image:
+    """Decode capture bytes as PNG only, refusing other formats and oversized images."""
+    try:
+        image = Image.open(io.BytesIO(png), formats=["PNG"])
+    except Image.DecompressionBombError as exc:
+        raise BridgeError(
+            "E_POLICY_DENIED",
+            f"Capture image exceeds the {Image.MAX_IMAGE_PIXELS:,}-pixel decode limit: {exc}",
+            stage="validation",
+        ) from exc
+    except (UnidentifiedImageError, OSError) as exc:
+        raise BridgeError("E_POLICY_DENIED", f"Capture data is not a valid PNG: {exc}", stage="validation") from exc
+    pixels = image.width * image.height
+    if Image.MAX_IMAGE_PIXELS is not None and pixels > Image.MAX_IMAGE_PIXELS:
+        message = (
+            f"Capture image is {image.width}x{image.height} ({pixels:,} pixels), "
+            f"above the {Image.MAX_IMAGE_PIXELS:,}-pixel decode limit"
+        )
+        image.close()
+        raise BridgeError("E_POLICY_DENIED", message, stage="validation")
+    return image
+
+
 def visual_difference(first_png: bytes, second_png: bytes) -> float:
-    with Image.open(io.BytesIO(first_png)) as first, Image.open(io.BytesIO(second_png)) as second:
+    with _open_png(first_png) as first, _open_png(second_png) as second:
         a = first.convert("RGB").resize((256, 256), Image.Resampling.BILINEAR)
         b = second.convert("RGB").resize((256, 256), Image.Resampling.BILINEAR)
         raw_a = a.tobytes()
@@ -1640,7 +1669,7 @@ def visual_difference(first_png: bytes, second_png: bytes) -> float:
 def sample_pixel(png: bytes, x: float, y: float) -> dict[str, int | str]:
     if not (0 <= x <= 1 and 0 <= y <= 1):
         raise BridgeError("E_POLICY_DENIED", "Pixel coordinates must be normalized 0..1", stage="validation")
-    with Image.open(io.BytesIO(png)) as image:
+    with _open_png(png) as image:
         rgba = image.convert("RGBA")
         px = min(rgba.width - 1, round(x * (rgba.width - 1)))
         py = min(rgba.height - 1, round(y * (rgba.height - 1)))

@@ -29,7 +29,7 @@ At runtime, configuration resolves in this order: the absolute path in `CSP_MCP_
 & .\scripts\install.ps1
 ```
 
-The installer creates *.venv* in the repository with CPython 3.13 and installs `mcp==1.29.0`, `pywin32==312`, and `Pillow==12.3.0` from *requirements.lock.txt*, with hashes enforced. It finds Python 3.13 through the *py* launcher or the usual install folders; `-Python` names one explicitly.
+The installer creates *.venv* in the repository with CPython 3.13 and installs `mcp==1.30.0`, `pywin32==312`, and `Pillow==13.0.0` from *requirements.lock.txt*, with hashes enforced. It finds Python 3.13 through the *py* launcher or the usual install folders; `-Python` names one explicitly.
 
 It also audits the ACLs of the checkout, the asset roots, and their ancestors. If the audit rejects an untrusted ancestor, move the checkout and assets to a trusted directory or have an administrator review the ancestor ACLs. The explicit risk-acceptance switch skips only the initial ancestor gate; it does not repair ACLs or bypass the final requirement that every audited root and file tree be protected.
 
