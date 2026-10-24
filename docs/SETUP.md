@@ -21,6 +21,15 @@ Treat the recorded hashes as an attestation of a machine you have already inspec
 
 Rerun *configure.ps1* whenever CSP rewrites its shortcut settings, which it can do on its own; the pinned hash then stops matching and input is refused. Check first that the registered bindings in [Registered commands](USAGE.md#registered-commands) still hold. The script rewrites the whole local file, so add back any `capture_ignored_overlays` afterward.
 
+The CST-conversion tools need two optional path roots that *configure.ps1* does not write; add them to *config/config.local.json* by hand, and again after each *configure.ps1* run:
+
+| id | Location | Access |
+|---|---|---|
+| `cst_copy` | *.workspace\csps-cst-working-2026-10-14* in the folder that contains the checkout | read/write |
+| `cst_ascii_copy` | *csps-cst-ascii-20261014* directly in *%TEMP%*, an ASCII-only path; only together with `cst_copy` | read/write |
+
+*csp_mcp/config.py* is authoritative for which root ids exist, their read/write policy, and these exact locations; *scripts/security-acl.ps1* applies the same id and read/write rules, and a unit test fails if the two drift apart. Any other id is refused.
+
 At runtime, configuration resolves in this order: the absolute path in `CSP_MCP_CONFIG`, then *config/config.local.json*, then the tracked template *config/config.json*, which is not a ready-to-trust machine profile.
 
 ## 2. Install
@@ -31,7 +40,7 @@ At runtime, configuration resolves in this order: the absolute path in `CSP_MCP_
 
 The installer creates *.venv* in the repository with CPython 3.13 or 3.14 and installs `mcp==1.30.0`, `pywin32==312`, and `Pillow==13.0.0` from *requirements.lock.txt*, with hashes enforced. It finds Python 3.13 or 3.14 through the *py* launcher or the usual install folders; `-Python` names one explicitly.
 
-It also audits the ACLs of the checkout, the asset roots, and their ancestors. If the audit rejects an untrusted ancestor, move the checkout and assets to a trusted directory or have an administrator review the ancestor ACLs. The explicit risk-acceptance switch skips only the initial ancestor gate; it does not repair ACLs or bypass the final requirement that every audited root and file tree be protected.
+It also audits the ACLs of the checkout, every configured path root (the CST copy roots included), and their ancestors. Each audited tree must grant write, delete, or permission changes only to you, SYSTEM, and Administrators; an extra grant inherited from a parent folder is enough to fail the audit. The scripts never change ACLs themselves. If the audit rejects an untrusted ancestor, move the checkout and assets to a trusted directory or have an administrator review the ancestor ACLs. The explicit risk-acceptance switch skips only the initial ancestor gate; it does not repair ACLs or bypass the final requirement that every audited root and file tree be protected.
 
 ## 3. Test
 

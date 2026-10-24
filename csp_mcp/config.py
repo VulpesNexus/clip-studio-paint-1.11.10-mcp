@@ -18,6 +18,21 @@ LOCAL_CONFIG_NAME = "config.local.json"
 TRACKED_CONFIG_NAME = "config.json"
 LOCAL_AUTO_ACTIONS_NAME = "auto_actions.local.json"
 TRACKED_AUTO_ACTIONS_NAME = "auto_actions.json"
+# Path-root policy. scripts/security-acl.ps1 mirrors these two tables for the
+# install and registration audits; tests/test_config.py keeps them in step.
+# Every root must be readable, and its write flag must equal this table.
+PATH_ROOT_WRITE_POLICY = {
+    "input": False,
+    "working": True,
+    "exports": True,
+    "cst_copy": True,
+    "cst_ascii_copy": True,
+}
+ALLOWED_PATH_ROOT_SETS = (
+    frozenset({"input", "working", "exports"}),
+    frozenset({"input", "working", "exports", "cst_copy"}),
+    frozenset({"input", "working", "exports", "cst_copy", "cst_ascii_copy"}),
+)
 _ENV_PLACEHOLDER = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
 
 
@@ -287,13 +302,7 @@ def load_settings() -> Settings:
         for index, item in enumerate(roots_raw)
     )
     root_ids = [item.id for item in roots]
-    required_root_ids = {"input", "working", "exports"}
-    allowed_root_sets = (
-        required_root_ids,
-        required_root_ids | {"cst_copy"},
-        required_root_ids | {"cst_copy", "cst_ascii_copy"},
-    )
-    if len(root_ids) != len(set(root_ids)) or set(root_ids) not in allowed_root_sets:
+    if len(root_ids) != len(set(root_ids)) or set(root_ids) not in ALLOWED_PATH_ROOT_SETS:
         raise RuntimeError("path_roots require the three standard roots; only exact cst_copy and cst_ascii_copy may be added")
     if any(not item.path.is_absolute() or not item.read for item in roots):
         raise RuntimeError("Every path root must be absolute and readable")
@@ -328,6 +337,8 @@ def load_settings() -> Settings:
                 or configured_ascii_root != expected_ascii_root
                 or not str(expected_ascii_root).isascii()):
             raise RuntimeError("cst_ascii_copy must be the exact ASCII local temp copy directory")
+    if any(item.write != PATH_ROOT_WRITE_POLICY[item.id] for item in roots):
+        raise RuntimeError("Every path root must match its fixed write policy")
     normalized_roots = [os.path.normcase(str(item.path.resolve(strict=False))) for item in roots]
     for index, left in enumerate(normalized_roots):
         for right in normalized_roots[index + 1:]:
