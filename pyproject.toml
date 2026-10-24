@@ -22,8 +22,8 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-  "mcp==1.29.0",
-  "Pillow==12.3.0",
+  "mcp==1.30.0",
+  "Pillow>=13,<14",
   "pywin32==312",
 ]
 
