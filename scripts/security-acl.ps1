@@ -74,6 +74,79 @@ function Resolve-CspSafeLocalPath {
     return $FullPath
 }
 
+# Path-root policy, mirrored from csp_mcp/config.py (PATH_ROOT_WRITE_POLICY and
+# ALLOWED_PATH_ROOT_SETS), which is authoritative; tests/test_config.py fails if
+# the two drift apart. Every root must be readable; write must equal this table.
+# config.py alone also pins where the CST copy roots may live.
+$CspPathRootWritePolicy = [ordered]@{
+    'input' = $false
+    'working' = $true
+    'exports' = $true
+    'cst_copy' = $true
+    'cst_ascii_copy' = $true
+}
+$CspAllowedPathRootSets = @(
+    'input,working,exports',
+    'input,working,exports,cst_copy',
+    'input,working,exports,cst_copy,cst_ascii_copy'
+)
+
+function Get-CspPathRootMap {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object]$PathRoots
+    )
+
+    $RootMap = [ordered]@{}
+    foreach ($Entry in @($PathRoots)) {
+        if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) {
+            throw 'Every path_roots entry must be a JSON object.'
+        }
+        $RootId = [string]$Entry.id
+        if (-not $CspPathRootWritePolicy.Contains($RootId) -or $RootMap.Contains($RootId)) {
+            throw "path_roots contains an unknown or duplicate id: $RootId"
+        }
+        if ($Entry.read -isnot [bool] -or -not $Entry.read) {
+            throw "The $RootId path root must have read=true."
+        }
+        $ExpectedWrite = $CspPathRootWritePolicy[$RootId]
+        if ($Entry.write -isnot [bool] -or $Entry.write -ne $ExpectedWrite) {
+            throw "The $RootId path root has an invalid write policy."
+        }
+        $RootMap[$RootId] = Resolve-CspSafeLocalPath `
+            -Value ([string]$Entry.path) `
+            -FieldName "path_roots[$RootId].path"
+    }
+    $ConfiguredSet = (@($CspPathRootWritePolicy.Keys | Where-Object { $RootMap.Contains($_) })) -join ','
+    if ($CspAllowedPathRootSets -notcontains $ConfiguredSet) {
+        throw (
+            'path_roots must define input, working, and exports exactly once; ' +
+            'cst_copy may be added, and cst_ascii_copy only together with cst_copy.'
+        )
+    }
+
+    $NormalizedRoots = @($RootMap.Values)
+    for ($LeftIndex = 0; $LeftIndex -lt $NormalizedRoots.Count; $LeftIndex++) {
+        for ($RightIndex = $LeftIndex + 1; $RightIndex -lt $NormalizedRoots.Count; $RightIndex++) {
+            $Left = $NormalizedRoots[$LeftIndex]
+            $Right = $NormalizedRoots[$RightIndex]
+            $LeftPrefix = $Left.TrimEnd('\') + '\'
+            $RightPrefix = $Right.TrimEnd('\') + '\'
+            if (
+                [string]::Equals($Left, $Right, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $Left.StartsWith($RightPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $Right.StartsWith($LeftPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+            ) {
+                throw 'Configured asset roots must not duplicate or contain one another.'
+            }
+        }
+    }
+    return $RootMap
+}
+
 function Get-CspConfiguration {
     [CmdletBinding()]
     param(
@@ -142,46 +215,7 @@ function Get-CspConfiguration {
         throw 'shortcut_profile_files must contain at least one configured file.'
     }
 
-    $RootMap = @{}
-    foreach ($Entry in @($Raw.path_roots)) {
-        if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) {
-            throw 'Every path_roots entry must be a JSON object.'
-        }
-        $RootId = [string]$Entry.id
-        if ($RootId -notin @('input', 'working', 'exports') -or $RootMap.ContainsKey($RootId)) {
-            throw "path_roots contains an unknown or duplicate id: $RootId"
-        }
-        if ($Entry.read -isnot [bool] -or -not $Entry.read) {
-            throw "The $RootId path root must have read=true."
-        }
-        $ExpectedWrite = $RootId -ne 'input'
-        if ($Entry.write -isnot [bool] -or $Entry.write -ne $ExpectedWrite) {
-            throw "The $RootId path root has an invalid write policy."
-        }
-        $RootMap[$RootId] = Resolve-CspSafeLocalPath `
-            -Value ([string]$Entry.path) `
-            -FieldName "path_roots[$RootId].path"
-    }
-    if ($RootMap.Count -ne 3) {
-        throw 'path_roots must define input, working, and exports exactly once.'
-    }
-
-    $NormalizedRoots = @($RootMap['input'], $RootMap['working'], $RootMap['exports'])
-    for ($LeftIndex = 0; $LeftIndex -lt $NormalizedRoots.Count; $LeftIndex++) {
-        for ($RightIndex = $LeftIndex + 1; $RightIndex -lt $NormalizedRoots.Count; $RightIndex++) {
-            $Left = $NormalizedRoots[$LeftIndex]
-            $Right = $NormalizedRoots[$RightIndex]
-            $LeftPrefix = $Left.TrimEnd('\') + '\'
-            $RightPrefix = $Right.TrimEnd('\') + '\'
-            if (
-                [string]::Equals($Left, $Right, [System.StringComparison]::OrdinalIgnoreCase) -or
-                $Left.StartsWith($RightPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
-                $Right.StartsWith($LeftPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-            ) {
-                throw 'Configured asset roots must not duplicate or contain one another.'
-            }
-        }
-    }
+    $RootMap = Get-CspPathRootMap -PathRoots $Raw.path_roots
 
     $TrackedConfigPath = [System.IO.Path]::GetFullPath(
         (Join-Path $ResolvedProjectRoot 'config\config.json')
@@ -205,11 +239,11 @@ function Get-CspConfiguration {
         InputRoot = $RootMap['input']
         WorkingRoot = $RootMap['working']
         ExportsRoot = $RootMap['exports']
-        AssetRoots = [string[]]@(
-            $RootMap['input'],
-            $RootMap['working'],
-            $RootMap['exports']
-        )
+        CstCopyRoot = $RootMap['cst_copy']
+        CstAsciiCopyRoot = $RootMap['cst_ascii_copy']
+        # Every configured root, CST copies included: the server writes into all
+        # of them except input, so each gets the same ACL audit.
+        AssetRoots = [string[]]@($RootMap.Values)
     }
 }
 

@@ -63,6 +63,14 @@ jobs:
         shell: pwsh
         run: python -X utf8 -m unittest discover -s tests -p 'test_*.py' -v
 
+      - name: Test the PowerShell path-root policy
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\security_acl_roots.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 run failed.' }
+          pwsh -NoProfile -File tests\security_acl_roots.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 run failed.' }
+
       - name: Reject whitespace errors in the release commit
         shell: pwsh
         run: git diff-tree --check --root HEAD

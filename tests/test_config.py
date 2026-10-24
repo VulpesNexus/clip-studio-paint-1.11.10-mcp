@@ -252,6 +252,46 @@ class ConfigurationTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         load_settings()
 
+    def test_ascii_cst_root_requires_workspace_copy_and_unique_ids(self) -> None:
+        baseline = config_module._read_json(config_module.CONFIG_DIR / "config.json")
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            project = parent / "MCP"
+            project.mkdir()
+            workspace_copy = parent / ".workspace" / "csps-cst-working-2026-10-14"
+            workspace_copy.mkdir(parents=True)
+            ascii_copy = parent / "csps-cst-ascii-20261014"
+            ascii_copy.mkdir()
+            workspace_entry = {"id": "cst_copy", "path": str(workspace_copy), "read": True, "write": True}
+            ascii_entry = {"id": "cst_ascii_copy", "path": str(ascii_copy), "read": True, "write": True}
+            for extra in ([ascii_entry], [workspace_entry, workspace_entry], [workspace_entry, ascii_entry, ascii_entry]):
+                candidate = copy.deepcopy(baseline)
+                candidate["path_roots"].extend(extra)
+                with (
+                    self.subTest(ids=[item["id"] for item in extra]),
+                    patch.object(config_module, "PROJECT_ROOT", project),
+                    patch.object(config_module.tempfile, "gettempdir", return_value=str(parent)),
+                    patch("csp_mcp.config._read_json", return_value=candidate),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        load_settings()
+
+    def test_powershell_audit_mirrors_the_path_root_policy(self) -> None:
+        # config.py is authoritative; scripts/security-acl.ps1 must carry the same tables.
+        script = (config_module.PROJECT_ROOT / "scripts" / "security-acl.ps1").read_text(encoding="utf-8")
+        table = re.search(r"\$CspPathRootWritePolicy = \[ordered\]@\{(.*?)\n\}", script, re.S)
+        sets = re.search(r"\$CspAllowedPathRootSets = @\((.*?)\n\)", script, re.S)
+        self.assertIsNotNone(table)
+        self.assertIsNotNone(sets)
+        write_policy = {
+            root_id: flag == "true"
+            for root_id, flag in re.findall(r"'([a-z_]+)' = \$(true|false)", table.group(1))
+        }
+        self.assertEqual(write_policy, config_module.PATH_ROOT_WRITE_POLICY)
+        self.assertEqual(list(write_policy), list(config_module.PATH_ROOT_WRITE_POLICY))
+        allowed_sets = {frozenset(item.split(",")) for item in re.findall(r"'([a-z_,]+)'", sets.group(1))}
+        self.assertEqual(allowed_sets, set(config_module.ALLOWED_PATH_ROOT_SETS))
+
     def test_registered_commands_are_valid_and_no_raw_code_exists(self) -> None:
         commands = load_commands()
         self.assertEqual(len(commands), 9)
