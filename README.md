@@ -35,7 +35,7 @@ Restart Codex, open CSP, and ask the agent to call `csp_health` and then `csp_ca
 
 - Every click, drag, keystroke, command, or file-dialog action goes through `csp_preflight`, which the host asks you to approve. The token it issues works once, for 45 seconds, for exactly the approved parameters.
 - Don't use the mouse or keyboard while the agent works in CSP: any input cancels its pending action, by design.
-- Files are opened and saved only inside *Input* (read-only), *Working*, and *Exports*.
+- Files are opened and saved only inside *Input* (read-only), *Working*, and *Exports*; the optional CST-conversion tools also write verified copies under their own configured roots (see [setup](docs/SETUP.md)).
 - If CSP rewrites its shortcut settings, input is refused until you rerun *configure.ps1*.
 - Discord's overlay, or any other full-screen click-through overlay, blocks captures until you allow it in your local configuration.
 
