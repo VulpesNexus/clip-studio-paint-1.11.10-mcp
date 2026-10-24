@@ -14,13 +14,15 @@ from csp_mcp import app
 
 
 class AppContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_registered_tools_match_the_documented_33_tool_contract(self) -> None:
+    async def test_registered_tools_match_the_documented_tool_catalog(self) -> None:
         registered = {tool.name for tool in await app.mcp.list_tools()}
         catalog = (Path(__file__).resolve().parent.parent / "docs" / "TOOL_CATALOG.md").read_text(
             encoding="utf-8"
         )
         documented = set(re.findall(r"\| `(csp_[^`]+)` \|", catalog))
-        self.assertEqual(len(registered), 33)
+        stated = re.search(r"The server defines (\d+) tools", catalog)
+        self.assertIsNotNone(stated)
+        self.assertEqual(len(registered), int(stated.group(1)))
         self.assertEqual(registered, documented)
 
         preflight = app.mcp._tool_manager.get_tool("csp_preflight")
