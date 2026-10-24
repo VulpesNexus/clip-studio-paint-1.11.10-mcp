@@ -12,7 +12,7 @@ This is a fork of [A2pha/clip-studio-paint-5.1.2-production-mcp](https://github.
 - Windows.
 - CLIP STUDIO PAINT **1.11.10.0**, with the display at 100% scaling (window DPI 96). Other CSP versions are refused; [compatibility](docs/COMPATIBILITY.md) lists which ones would likely work with a profile of their own.
 - Any Windows display language for CSP itself. The native *Open* and *Save As* dialogs are recognized in French, English, and Simplified Chinese only.
-- CPython 3.13, and Git.
+- CPython 3.13 or 3.14, and Git.
 - Codex, or another stdio MCP host with an equivalent approval policy.
 - Auto Actions need CSP PRO or EX.
 

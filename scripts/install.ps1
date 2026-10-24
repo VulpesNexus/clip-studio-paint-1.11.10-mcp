@@ -10,7 +10,7 @@ $VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 
 . (Join-Path $PSScriptRoot 'security-acl.ps1')
 
-function Test-CspPython313Candidate {
+function Test-CspPythonCandidate {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Command,
@@ -18,9 +18,11 @@ function Test-CspPython313Candidate {
         [string[]]$PrefixArguments = @()
     )
 
+    # No double quotes in this code: PowerShell 5.1 strips embedded quotes when
+    # passing -c arguments to native executables, which corrupts the probe.
     $ProbeCode = (
         'import json,sys; ' +
-        'print(json.dumps({"executable":sys.executable,"major":sys.version_info.major,"minor":sys.version_info.minor}))'
+        'print(json.dumps(dict(executable=sys.executable, major=sys.version_info.major, minor=sys.version_info.minor)))'
     )
     try {
         $ProbeOutput = @(& $Command @PrefixArguments -c $ProbeCode 2>$null)
@@ -42,13 +44,13 @@ function Test-CspPython313Candidate {
     } catch {
         return $null
     }
-    if ($Probe.major -ne 3 -or $Probe.minor -ne 13) {
+    if ($Probe.major -ne 3 -or ($Probe.minor -ne 13 -and $Probe.minor -ne 14)) {
         return $null
     }
     try {
         $Executable = Resolve-CspSafeLocalPath `
             -Value ([string]$Probe.executable) `
-            -FieldName 'Python 3.13 executable'
+            -FieldName 'Python executable'
     } catch {
         return $null
     }
@@ -62,7 +64,7 @@ function Test-CspPython313Candidate {
     }
 }
 
-function Resolve-CspPython313 {
+function Resolve-CspPython {
     param([string]$RequestedPython)
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedPython)) {
@@ -87,15 +89,22 @@ function Resolve-CspPython313 {
             }
             $RequestedCommand = $ResolvedCommand.Source
         }
-        $Prefix = @()
+        # ,@() keeps the single empty prefix: @(@()) would flatten to nothing.
+        $Prefixes = ,@()
         if ([System.IO.Path]::GetFileName($RequestedCommand) -ieq 'py.exe') {
-            $Prefix = @('-3.13')
+            $Prefixes = @(@('-3.13'), @('-3.14'))
         }
-        $Selection = Test-CspPython313Candidate `
-            -Command $RequestedCommand `
-            -PrefixArguments $Prefix
+        $Selection = $null
+        foreach ($Prefix in $Prefixes) {
+            $Selection = Test-CspPythonCandidate `
+                -Command $RequestedCommand `
+                -PrefixArguments ([string[]]$Prefix)
+            if ($null -ne $Selection) {
+                break
+            }
+        }
         if ($null -eq $Selection) {
-            throw 'The requested Python command is not a working Python 3.13 interpreter.'
+            throw 'The requested Python command is not a working Python 3.13 or 3.14 interpreter.'
         }
         return $Selection
     }
@@ -107,16 +116,22 @@ function Resolve-CspPython313 {
 
     $PyLauncher = Get-Command 'py.exe' -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if ($null -ne $PyLauncher -and $Seen.Add($PyLauncher.Source + '|-3.13')) {
-        $Candidates.Add([pscustomobject]@{
-            Command = $PyLauncher.Source
-            PrefixArguments = [string[]]@('-3.13')
-        })
+    if ($null -ne $PyLauncher) {
+        foreach ($LauncherMinor in @('3.13', '3.14')) {
+            if ($Seen.Add($PyLauncher.Source + '|' + $LauncherMinor)) {
+                $Candidates.Add([pscustomobject]@{
+                    Command = $PyLauncher.Source
+                    PrefixArguments = [string[]]@('-' + $LauncherMinor)
+                })
+            }
+        }
     }
 
     foreach ($CandidatePath in @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\python.exe'),
-        (Join-Path $env:ProgramFiles 'Python313\python.exe')
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'),
+        (Join-Path $env:ProgramFiles 'Python313\python.exe'),
+        (Join-Path $env:ProgramFiles 'Python314\python.exe')
     )) {
         if (
             -not [string]::IsNullOrWhiteSpace($CandidatePath) -and
@@ -130,7 +145,7 @@ function Resolve-CspPython313 {
         }
     }
 
-    foreach ($CommandName in @('python3.13.exe', 'python.exe')) {
+    foreach ($CommandName in @('python3.13.exe', 'python3.14.exe', 'python.exe')) {
         foreach ($CommandInfo in @(Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue)) {
             if ($Seen.Add($CommandInfo.Source)) {
                 $Candidates.Add([pscustomobject]@{
@@ -142,14 +157,14 @@ function Resolve-CspPython313 {
     }
 
     foreach ($Candidate in $Candidates) {
-        $Selection = Test-CspPython313Candidate `
+        $Selection = Test-CspPythonCandidate `
             -Command $Candidate.Command `
             -PrefixArguments $Candidate.PrefixArguments
         if ($null -ne $Selection) {
             return $Selection
         }
     }
-    throw 'Python 3.13 was not found. Install it or pass -Python with a Python 3.13 executable.'
+    throw 'Python 3.13 or 3.14 was not found. Install it or pass -Python with a Python 3.13 or 3.14 executable.'
 }
 
 $Configuration = Get-CspConfiguration -ProjectRoot $ProjectRoot
@@ -194,7 +209,7 @@ foreach ($Path in @($Configuration.AssetRoots) + @((Join-Path $ProjectRoot 'logs
 # protected ACL. This audit never changes ACLs automatically.
 Assert-CspRestrictedAcl -LiteralPaths $AclTargets
 
-$PythonSelection = Resolve-CspPython313 -RequestedPython $Python
+$PythonSelection = Resolve-CspPython -RequestedPython $Python
 if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
     $VenvArguments = @($PythonSelection.PrefixArguments) + @(
         '-m',
@@ -203,13 +218,13 @@ if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
     )
     & $PythonSelection.Command @VenvArguments
     if ($LASTEXITCODE -ne 0) {
-        throw 'Python 3.13 virtual-environment creation failed.'
+        throw 'Python virtual-environment creation failed.'
     }
 }
 
 $VenvVersion = & $VenvPython -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
-if ($LASTEXITCODE -ne 0 -or ([string]$VenvVersion).Trim() -ne '3.13') {
-    throw 'The existing project virtual environment is not based on Python 3.13.'
+if ($LASTEXITCODE -ne 0 -or ([string]$VenvVersion).Trim() -notin @('3.13', '3.14')) {
+    throw 'The existing project virtual environment is not based on Python 3.13 or 3.14.'
 }
 
 & $VenvPython -m pip install `

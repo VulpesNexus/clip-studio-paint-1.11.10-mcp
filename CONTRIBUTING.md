@@ -11,7 +11,7 @@ Thank you for helping improve this unofficial Clip Studio Paint MCP bridge.
 
 ## Development setup
 
-This project targets Windows, CPython 3.13, and the CSP 1.11.10 profile documented in the README. Run *scripts/configure.ps1* to create the local, gitignored machine configuration, then *scripts/install.ps1* to install the hash-locked environment.
+This project targets Windows, CPython 3.13 or 3.14, and the CSP 1.11.10 profile documented in the README. Run *scripts/configure.ps1* to create the local, gitignored machine configuration, then *scripts/install.ps1* to install the hash-locked environment.
 
 Before submitting a pull request, run:
 

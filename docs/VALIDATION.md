@@ -2,6 +2,13 @@
 
 Evidence for the `csp-1.11.10-dpi96-v1` profile: CLIP STUDIO PAINT 1.11.10.0 at window DPI 96, on Windows 11 with a French display language. Newest first.
 
+## 2026-10-25: Python 3.14 support
+
+- The installer accepts CPython 3.13 and 3.14, and CI runs the unit suite on both. The dependency lockfile resolves identically for both minors.
+- Fixed the interpreter probe for PowerShell 5.1: the probe embedded double quotes, which PS 5.1 strips when passing `-c` arguments to native executables, so the probe failed on every interpreter and *install.ps1* always reported that Python was not found. The probe is now quote-free; a missing rename of a helper call site was caught and fixed by a unit harness around the resolver.
+- On the owner machine (no *py* launcher; Python install-manager layout under *AppData\Local\Python*), the resolver found `pythoncore-3.14-64` through PATH, created *.venv* on Python 3.14, installed the hash-verified lockfile, and passed `pip check`; the unit suite passed there: 90 tests.
+- The ACL asserts were not exercised end to end on this machine: the project directory grants Modify to a non-owner SID, so *install.ps1* fail-closed as designed. Pre-existing and unrelated to Python support.
+
 ## 2026-09-23: public fork
 
 - CSP had rewritten *default.khc* on 2026-09-18, so its pinned hash no longer matched. The nine registered bindings were checked again and had not changed: `filenew` *Ctrl+N*, `fileopen` *Ctrl+O*, `fileclose` *Ctrl+W*, `filesaveas` *Ctrl+Shift+S*, `undo` *Ctrl+Z*, `redo` *Ctrl+Y*, `selectall` *Ctrl+A*, and `selectdeselect` *Ctrl+D*, with *Escape* handled by CSP itself. The local pins were refreshed.
